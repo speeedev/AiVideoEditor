@@ -147,7 +147,8 @@ class EditorSession:
         if not asset.has_video:
             raise EditError(f"asset '{asset_id}' has no video")
         d = self.project.cache_dir("frames", asset_id)
-        frames = [extract_frame(asset.path, t, d / f"{t:010.3f}_{thumb_width}.jpg", max_width=thumb_width)
+        tag = "s" if asset.video_path != asset.path else ""
+        frames = [extract_frame(asset.video_path, t, d / f"{t:010.3f}_{thumb_width}{tag}.jpg", max_width=thumb_width)
                   for t in times]
         out = self.project.cache_dir("sheets") / f"{asset_id}-{time.time_ns()}.jpg"
         return make_sheet(frames, [f"src {format_tc(t)}" for t in times], out, columns=columns)

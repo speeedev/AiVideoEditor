@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from .analysis.audio import decode_audio
 from .analysis.speech import analyze_speech
@@ -196,4 +197,44 @@ def _clearly_apart(asset, members) -> bool:
 def set_manual_offset(project: Project, asset_id: str, offset: float) -> None:
     ref = project.data.sync_reference or primary_audio_asset(project) or asset_id
     project.asset(asset_id).sync = SyncInfo(reference=ref, offset=offset, confidence=0.0, method="manual")
+    project.save()
+
+
+def stabilize_asset(project: Project, asset_id: str, strength: str = "medium", *, off: bool = False,
+                    log: Log = print) -> str:
+    """Use a stabilised copy of a recording's picture (or go back to the original with ``off``)."""
+    from .media.stabilize import stabilize
+    asset = project.asset(asset_id)
+    if not asset.has_video or asset.is_image:
+        raise ValueError(f"'{asset_id}' has no video to stabilise")
+    if off:
+        asset.stabilized = None
+    else:
+        out = project.cache_dir("stabilized") / f"{asset_id}_{strength}.mp4"
+        if not out.exists():
+            log(f"[{asset_id}] stabilising ({strength}); this re-encodes the picture and can take a while…")
+            stabilize(asset.path, out, strength)
+        asset.stabilized = str(out)
+    project.save()
+    ensure_proxy(project, asset, log=log)        # the editing proxy follows the picture source
+    return asset.video_path
+
+
+def isolate_voice(project: Project, asset_id: str, music_level: float = 0.0, *, off: bool = False,
+                  log: Log = print) -> None:
+    """Use only the speech of a recording (separated locally), optionally keeping some music."""
+    from .analysis.separate import separate_voice
+    asset = project.asset(asset_id)
+    if not asset.has_audio:
+        raise ValueError(f"'{asset_id}' has no audio")
+    if off:
+        asset.audio_mode = "original"
+        project.save()
+        return
+    if not (asset.voice_path and Path(asset.voice_path).exists()):
+        voice, music = separate_voice(asset.path, project.cache_dir("separated"), asset_id,
+                                      stream=asset.audio_stream, log=log)
+        asset.voice_path, asset.music_path = str(voice), str(music)
+    asset.audio_mode = "voice"
+    asset.music_level = max(0.0, min(1.0, music_level))
     project.save()

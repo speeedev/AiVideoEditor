@@ -288,3 +288,89 @@ def test_silent_screen_recording_project(tmp_path):
     out_file = s.render(preview=False)
     info = probe(out_file)
     assert info.has_video and info.has_audio and abs(info.duration - 8.0) < 0.1
+
+
+def _px(session, t, xy=(0.5, 0.5), width=320):
+    im = Image.open(session.still(t, width=width)).convert("RGB")
+    return np.array(im.getpixel((int(im.size[0] * xy[0]), int(im.size[1] * xy[1]))), dtype=float)
+
+
+def _two_clip_timeline(session):
+    from aivideoeditor.timeline import Timeline, ops
+    tl = Timeline(canvas=session.project.data.canvas.model_copy())
+    v = ops.add_track(tl, "video", role="screen")
+    ops.place_clip(tl, v.id, "screen", 0.0, 3.0, 0.0, volume=0)
+    ops.place_clip(tl, v.id, "camera", 2.0, 5.0, 3.0, volume=0, transform=None)
+    tl.tracks[0].clips[1].transform.fit = "cover"
+    session.project.timeline = tl
+    session.commit()
+    return tl
+
+
+def test_color_correct_warmth(session):
+    ctx = NS(session=session)
+    before = _px(session, 2.0, (0.5, 0.5))
+    out, err = run_tool(ctx, "color_correct", {"asset_id": "screen", "warmth": 1.0, "brightness": 0.1})
+    assert not err, out
+    after = _px(session, 2.0, (0.5, 0.5))
+    assert after[0] - after[2] > before[0] - before[2] + 15        # redder than bluer
+    out, err = run_tool(ctx, "color_correct", {"asset_id": "screen"})
+    assert not err and all(c.color is None for _, c in session.timeline.clips_of_asset("screen"))
+
+
+def test_crossfade_and_dip(session, tmp_path):
+    tl = _two_clip_timeline(session)
+    ctx = NS(session=session)
+    a, b = _px(session, 2.5, (0.1, 0.9)), _px(session, 4.5, (0.1, 0.9))
+    out, err = run_tool(ctx, "add_transition", {"time": 3.02, "kind": "crossfade", "duration": 1.0})
+    assert not err and "1 track" in out
+    assert session.timeline.tracks[0].clips[1].transition == "crossfade"
+    mid = _px(session, 3.5, (0.1, 0.9))
+    # halfway through the crossfade both pictures are visible
+    assert np.abs(mid - (a + b) / 2).max() < np.abs(a - b).max() * 0.35
+    st = RenderSettings.for_timeline(session.timeline, preview=True, preview_width=320)
+    st.max_inputs = 2
+    out_file = render_timeline(session.timeline, session.project.assets, tmp_path / "x.mp4", st)
+    assert _frames(out_file) == round(session.timeline.duration * 30)
+    out, err = run_tool(ctx, "add_transition", {"time": 3.0, "kind": "dip_to_black", "duration": 1.0})
+    assert not err and session.timeline.tracks[0].clips[1].transition == "none"
+    assert _px(session, 3.0, (0.1, 0.9)).max() < 25                 # black at the cut
+    out, err = run_tool(ctx, "add_transition", {"time": 1.0, "kind": "crossfade"})
+    assert err and "nearest cuts" in out
+
+
+def test_stabilize_makes_a_copy(session):
+    from aivideoeditor.media.proxy import load_proxies
+    from aivideoeditor.pipeline import stabilize_asset
+    p = session.project
+    path = stabilize_asset(p, "camera", "low", log=lambda m: None)
+    a = p.asset("camera")
+    assert a.stabilized and path == a.stabilized and a.video_path != a.path
+    assert abs(probe(a.stabilized).duration - a.duration) < 0.1
+    assert session.still(2.0, width=320).exists()
+    stabilize_asset(p, "camera", off=True, log=lambda m: None)
+    assert p.asset("camera").video_path == p.asset("camera").path
+    assert isinstance(load_proxies(p), dict)
+
+
+def test_separated_voice_is_rendered(session, tmp_path, demo_media):
+    """Engine side of isolate_voice: the voice file replaces the sound, music is mixed in at music_level."""
+    from aivideoeditor.demo import write_wav
+    p = session.project
+    mic = decode_audio(p.asset("mic").path, 48000)
+    voice, music = tmp_path / "voice.wav", tmp_path / "music.wav"
+    write_wav(voice, mic * 0.5)
+    write_wav(music, np.sin(np.arange(mic.size) / 48000 * 2 * np.pi * 220).astype(np.float32) * 0.2)
+    a = p.asset("mic")
+    a.voice_path, a.music_path, a.audio_mode, a.music_level = str(voice), str(music), "voice", 0.0
+    session.timeline.audio.normalize = False
+    st = RenderSettings.for_timeline(session.timeline, preview=True, preview_width=320)
+    render_timeline(session.timeline, p.assets, tmp_path / "v.mp4", st, workdir=tmp_path / "w")
+    got = decode_audio(tmp_path / "w" / "audio.wav", 48000)
+    n = min(got.size, mic.size) - 4800
+    assert np.abs(got[4800:n] - mic[4800:n] * 0.5).max() < 0.02          # only the (quieter) voice
+    a.music_level = 0.5
+    render_timeline(session.timeline, p.assets, tmp_path / "m.mp4", st, workdir=tmp_path / "w2")
+    got2 = decode_audio(tmp_path / "w2" / "audio.wav", 48000)
+    extra = got2[4800:n] - got[4800:n]
+    assert 0.05 < np.abs(extra).max() < 0.15                              # music at half level (0.2 * 0.5)

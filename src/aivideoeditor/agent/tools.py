@@ -771,6 +771,119 @@ def get_scenes(ctx, args: Empty) -> ToolOutput:
     return "\n".join(lines)
 
 
+class ColorIn(BaseModel):
+    clip_ids: list[str] | None = Field(None, description="Clips to correct (default: every clip of asset_id, "
+                                                         "or every video clip)")
+    asset_id: str | None = None
+    brightness: float = Field(0.0, ge=-0.5, le=0.5, description="-0.5 darker .. +0.5 brighter")
+    contrast: float = Field(1.0, ge=0.5, le=2.0)
+    saturation: float = Field(1.0, ge=0.0, le=2.5, description="0 black and white, 1 unchanged, >1 more vivid")
+    warmth: float = Field(0.0, ge=-1.0, le=1.0, description="-1 cooler/bluer .. +1 warmer/more orange")
+
+
+@tool("color_correct", ColorIn, mutates=True)
+def color_correct(ctx, args: ColorIn) -> ToolOutput:
+    """Colour-correct video clips: brightness, contrast, saturation and warmth (white balance). Use it to fix
+    dark, washed-out or off-colour footage or to match cameras; check frames before and after with view_timeline.
+    Neutral values (0, 1, 1, 0) remove the correction."""
+    from ..timeline.model import ColorGrade
+    tl = ctx.session.timeline
+    if args.clip_ids:
+        clips = [tl.find_clip(cid)[1] for cid in args.clip_ids]
+    elif args.asset_id:
+        clips = [c for _, c in tl.clips_of_asset(ctx.session.project.asset(args.asset_id).id)]
+    else:
+        clips = [c for t in tl.video_tracks for c in t.clips]
+    if not clips:
+        raise EditError("no clips to correct")
+    grade = ColorGrade(brightness=args.brightness, contrast=args.contrast, saturation=args.saturation,
+                       warmth=args.warmth)
+    for c in clips:
+        c.color = None if grade.neutral else grade.model_copy()
+    return f"{'Removed the colour correction from' if grade.neutral else 'Colour-corrected'} {len(clips)} clip(s)."
+
+
+class TransitionIn(BaseModel):
+    time: float = Field(description="Timeline time of the cut (snapped to the nearest cut within 0.15 s)")
+    kind: Literal["crossfade", "dip_to_black", "none"] = Field(
+        description="crossfade: picture and sound blend into the next clip; dip_to_black: fade out and back in; "
+                    "none: hard cut")
+    duration: float = Field(0.5, ge=0.1, le=3.0)
+
+
+@tool("add_transition", TransitionIn, mutates=True)
+def add_transition(ctx, args: TransitionIn) -> ToolOutput:
+    """Smooth a cut with a crossfade or a dip to black (or make it a hard cut again). Applies to every track that
+    cuts at that moment. Use sparingly: jump cuts are normal in talking-head videos; transitions suit scene or
+    topic changes."""
+    tl = ctx.session.timeline
+    tol = 1.5 / tl.canvas.fps
+    cuts = sorted({round(c.start, 4) for t in tl.tracks for p, c in zip(sorted(t.clips, key=lambda x: x.start),
+                                                                          sorted(t.clips, key=lambda x: x.start)[1:])
+                   if abs(p.end - c.start) < tol})
+    if not cuts:
+        raise EditError("there are no cuts between adjacent clips yet")
+    at = min(cuts, key=lambda x: abs(x - args.time))
+    if abs(at - args.time) > 0.15:
+        near = ", ".join(f"{x:.2f}" for x in sorted(cuts, key=lambda x: abs(x - args.time))[:5])
+        raise EditError(f"no cut at {args.time:.2f}; nearest cuts: {near}")
+    done = 0
+    for t in tl.tracks:
+        clips = sorted(t.clips, key=lambda x: x.start)
+        for prev, c in zip(clips, clips[1:]):
+            if abs(c.start - at) > tol or abs(prev.end - c.start) > tol:
+                continue
+            d = min(args.duration, c.duration / 2, prev.duration / 2 if args.kind == "dip_to_black" else 99)
+            c.transition, prev.fade_out, c.fade_in = "none", 0.0, 0.0
+            if args.kind == "crossfade":
+                c.transition, c.transition_duration = "crossfade", d
+            elif args.kind == "dip_to_black":
+                prev.fade_out = c.fade_in = d / 2
+            done += 1
+    return f"{args.kind.replace('_', ' ')} at {format_tc(at)} on {done} track(s)."
+
+
+class StabilizeIn(BaseModel):
+    asset_id: str
+    strength: Literal["low", "medium", "high"] = "medium"
+    off: bool = Field(False, description="Go back to the original picture")
+
+
+@tool("stabilize", StabilizeIn)
+def stabilize(ctx, args: StabilizeIn) -> ToolOutput:
+    """Smooth out camera shake in a recording (handheld phone footage). Makes a stabilised copy (the original is
+    kept; long files take a while) and zooms in slightly to hide moving edges; every clip of the recording uses
+    it. Check with view_source / view_timeline."""
+    from ..pipeline import stabilize_asset
+    stabilize_asset(ctx.session.project, args.asset_id, args.strength, off=args.off, log=lambda m: None)
+    return (f"{args.asset_id}: back to the original picture." if args.off
+            else f"{args.asset_id}: stabilised ({args.strength}).")
+
+
+class IsolateVoiceIn(BaseModel):
+    asset_id: str | None = Field(None, description="Recording with speech (default: every scene's speech recording)")
+    music_level: float = Field(0.0, ge=0.0, le=1.0, description="How much of the separated music/background to "
+                                                               "keep under the voice (0 = voice only)")
+    off: bool = Field(False, description="Use the original sound again")
+
+
+@tool("isolate_voice", IsolateVoiceIn)
+def isolate_voice(ctx, args: IsolateVoiceIn) -> ToolOutput:
+    """Separate speech from music and background sound (a local AI model; the first run takes a while) and use only
+    the voice, optionally keeping some of the music. For recordings where music, a TV or noise competes with
+    the speaker. off=true restores the original sound."""
+    from ..pipeline import isolate_voice as run
+    ids = [args.asset_id] if args.asset_id else ctx.session.speech_sources()
+    if not ids:
+        raise EditError("no recording with speech")
+    for aid in ids:
+        run(ctx.session.project, aid, args.music_level, off=args.off, log=lambda m: None)
+    if args.off:
+        return f"Original sound restored for {', '.join(ids)}."
+    keep = f", keeping {args.music_level:.0%} of the music" if args.music_level else ""
+    return f"Using the separated voice of {', '.join(ids)}{keep}."
+
+
 @tool("lift", LiftIn, mutates=True)
 def lift(ctx, args: LiftIn) -> ToolOutput:
     """Clear a time range on specific tracks without closing the gap (e.g. remove b-roll, leave a hole)."""

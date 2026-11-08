@@ -202,6 +202,7 @@ class App:
                     "duration": a.duration, "has_video": a.has_video, "has_audio": a.has_audio,
                     "is_image": a.is_image, "audio_stream": a.audio_stream,
                     "scene": scene_of.get(a.id, (None, 0))[0],
+                    "stabilized": bool(a.stabilized), "voice": a.uses_voice, "music_level": a.music_level,
                     "width": a.info.get("width"), "height": a.info.get("height"),
                     "sync": a.sync.model_dump() if a.sync else None,
                     "analysis": {"transcript": tr is not None, "speech": p.speech(a.id) is not None,
@@ -318,6 +319,8 @@ class App:
             if proxy:
                 return Path(proxy.path)
             return Path(asset.video_path)
+        if asset.uses_voice:
+            return Path(asset.voice_path)
         return Path(asset.path)
 
     def _timeline_key(self) -> str:
@@ -438,7 +441,7 @@ class App:
 
         from .agent.tools import run_tool
         allowed = {"ripple_delete", "apply_layout", "zoom", "speed_up", "add_text", "add_marker", "set_captions",
-                   "split", "delete_clips", "move_range"}
+                   "split", "delete_clips", "move_range", "color_correct", "add_transition"}
         if tool not in allowed:
             raise ValueError(f"tool '{tool}' is not available from the UI")
         if self.job:
@@ -467,6 +470,20 @@ class App:
                 raise
         self.bus.publish({"type": "state"})
         return {"clip": clip.id, "result": f"{asset_id} → {format_tc(clip.start)}–{format_tc(clip.end)}"}
+
+    def asset_action(self, asset_id: str, action: str, value=None) -> None:
+        """Slow per-recording processing, run as a background job."""
+        from .pipeline import isolate_voice, stabilize_asset
+        self.project.asset(asset_id)
+        jobs = {
+            "stabilize": lambda: stabilize_asset(self.project, asset_id, value or "medium", log=self.log),
+            "unstabilize": lambda: stabilize_asset(self.project, asset_id, off=True, log=self.log),
+            "isolate": lambda: isolate_voice(self.project, asset_id, float(value or 0.0), log=self.log),
+            "original": lambda: isolate_voice(self.project, asset_id, off=True, log=self.log),
+        }
+        if action not in jobs:
+            raise ValueError(f"unknown action '{action}'")
+        self.start_job(action, lambda: (jobs[action](), None)[1])
 
     def reveal(self, name: str) -> None:
         """Show a render in Finder / Explorer (this app runs on the user's own machine)."""
@@ -757,6 +774,9 @@ def make_handler(app: App):
                 if path == "/api/timeline/add":
                     return self._json(app.drop_asset(body.get("asset_id", ""), float(body.get("start") or 0.0),
                                                      body.get("track_id") or None))
+                if path == "/api/asset_action":
+                    app.asset_action(body.get("asset_id", ""), body.get("action", ""), body.get("value"))
+                    return self._json({"ok": True})
                 if path == "/api/reveal":
                     app.reveal(body.get("file", ""))
                     return self._json({"ok": True})

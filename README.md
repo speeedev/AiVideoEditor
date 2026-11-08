@@ -46,8 +46,10 @@ yol var:
 ```bash
 git clone https://github.com/speeedev/AiVideoEditor.git
 cd AiVideoEditor
-pip install -e ".[transcribe]"
+pip install -e ".[transcribe,separate]"
 ```
+
+`separate` ekstrası, konuşmayı müzikten ayırmak için Demucs'u kurar (yaklaşık 1 GB, isteğe bağlı).
 
 - FFmpeg kurulumu: macOS'ta `brew install ffmpeg`, Windows'ta `winget install ffmpeg`, Ubuntu'da
   `sudo apt install ffmpeg`.
@@ -118,7 +120,10 @@ Proje açıldıktan sonra:
 4. **Claude paneli:** ne istediğini yaz, örneğin "Hataları ve tekrarları temizle, akıcı bir kurgu yap,
    kelime vurgulu altyazı ekle". Claude'un düşüncelerini, kullandığı araçları ve baktığı kareleri
    canlı izlersin. Timeline da gözünün önünde güncellenir.
-5. Timeline'a tıklayınca o anın **kompozit karesi** görünür (layout, zoom, yazı ve altyazı dahil).
+5. **▶ Oynat** (Boşluk) kurguyu render beklemeden canlı oynatır. Timeline'a tıklayınca o anın kompozit karesi
+   görünür. Klibe tıklayınca seçilir: **Delete** siler, **Shift+Delete** boşluğu kapatarak keser, **S** böler;
+   seçili klibe **🎨 Renk** ve **Geçiş** uygulanabilir. Kayıt listesindeki **Titremeyi düzelt** ve
+   **Konuşmayı ayır** düğmeleri o kaydın tamamına uygulanır. **CC Altyazı** altyazı stilini değiştirir.
    Sürükleyerek bir **aralık seçebilirsin**: seçimi tek tıkla kesebilir (Delete), bir layout
    uygulayabilir ya da Claude'a "seçili aralığı…" diye talimat verebilirsin.
 6. *Ön izleme render* ile videoyu izle, sonra "girişi biraz daha kısalt" gibi talimatlarla devam et.
@@ -179,7 +184,13 @@ varsayılan `claude-opus-5-5`, abonelik modunda Claude Code'un varsayılanı). A
 | `add_music` | konuşma altında otomatik kısılan (ducking) müzik |
 | `add_overlay` | logo, slayt, ekran görüntüsü veya b-roll videosu bindirme (konum, boyut, saydamlık, fade) |
 | `set_audio_mastering` | final miksin loudness hedefi (varsayılan -14 LUFS, YouTube standardı) |
-| `add_text`, `set_captions` | başlık ve yazılar, kelime vurgulu altyazı |
+| `add_text` | yazı şablonları: düz yazı, başlık, alt bant (isim/ünvan), etiket, kapanış kartı; belirerek veya kayarak gelir |
+| `set_captions` | kelime vurgulu altyazı |
+| `color_correct` | parlaklık, kontrast, doygunluk, renk sıcaklığı |
+| `add_transition` | kesimlerde yumuşak geçiş (crossfade) veya siyaha geçiş |
+| `stabilize` | elde çekilmiş, sallanan görüntüyü sabitleme |
+| `isolate_voice` | konuşmayı müzik ve arka plan sesinden ayırma (yerel yapay zekâ modeli) |
+| `get_scenes`, `move_range` | ayrı sahneleri/denemeleri listeleme, sırasını değiştirme |
 | `place_clip`, `move_clip`, `trim_clip`, `split`, `lift`, `delete_clips`, `set_clip_properties` | klip düzeyinde ince ayar |
 | `set_track` | sessize alma, gizleme, kilitleme, ducking, **gürültü azaltma** ve **ses iyileştirme** |
 | `add_marker` | insan editöre not |

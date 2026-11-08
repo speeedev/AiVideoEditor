@@ -147,6 +147,8 @@ function renderAssets() {
     if (a.analysis.speech) b("sessizlik", "on");
     if (a.analysis.visual) b("görsel", "on");
     if (a.scene) b(`sahne ${a.scene}`, "on");
+    if (a.stabilized) b("sabitlendi", "on");
+    if (a.voice) b(a.music_level ? `konuşma + %${Math.round(a.music_level * 100)} müzik` : "sadece konuşma", "on");
     if (a.sync) {
       if (a.sync.method === "audio") b(`senkron ${a.sync.offset >= 0 ? "+" : ""}${a.sync.offset.toFixed(3)} sn`, "on");
       else if (a.sync.method === "manual") b(`elle ${a.sync.offset.toFixed(2)} sn`, "on");
@@ -171,6 +173,23 @@ function renderAssets() {
     });
     row.append(sel, del);
     item.appendChild(row);
+    const actions = el("div", "row asset-actions");
+    const act = (label, title, action, value) => {
+      const btn = el("button", "small", label);
+      btn.title = title;
+      btn.disabled = !!S.job;
+      btn.onclick = guard(() => api("/api/asset_action", { asset_id: a.id, action, value }));
+      actions.appendChild(btn);
+    };
+    if (a.has_video && !a.is_image) {
+      if (a.stabilized) act("Sabitlemeyi kaldır", "Orijinal görüntüye dön", "unstabilize");
+      else act("Titremeyi düzelt", "Elde çekilmiş, sallanan görüntüyü sabitler (uzun videolarda biraz sürer)", "stabilize");
+    }
+    if (a.has_audio && ["mic", "camera", "screen"].includes(a.role)) {
+      if (a.voice) act("Orijinal ses", "Ayrılmış konuşma yerine orijinal sesi kullan", "original");
+      else act("Konuşmayı ayır", "Konuşmayı müzik ve arka plan sesinden ayırır (yerel yapay zekâ modeli)", "isolate");
+    }
+    if (actions.children.length) item.appendChild(actions);
     box.appendChild(item);
   }
 }
@@ -209,6 +228,8 @@ function clipTags(c, track) {
   }
   if (c.volume === 0 && track.kind === "audio") tags.push("sessiz");
   if (c.fade_in || c.fade_out) tags.push("fade");
+  if (c.transition === "crossfade") tags.push("geçiş");
+  if (c.color) tags.push("renk");
   return tags;
 }
 function renderTimeline() {
@@ -373,7 +394,7 @@ function drawClipSelection() {
     const [t, c] = findClip(id);
     return `${ROLE_TR[t.role] || t.role || t.id} ${tc(c.start)}`;
   });
-  $("clipText").textContent = selectedClips.size === 1 ? `Seçili klip: ${parts[0]}` : `${selectedClips.size} klip seçili`;
+  $("clipText").textContent = selectedClips.size === 1 ? parts[0] : `${selectedClips.size} klip`;
 }
 const deleteClips = guard(async (ripple) => {
   if (!selectedClips.size) return;
@@ -714,6 +735,35 @@ function wireCaptions() {
   }
 }
 
+// ------------------------------------------------------------------- colour --
+function fillColor() {
+  const first = [...selectedClips].map(findClip).filter(Boolean)[0];
+  const g = (first && first[1].color) || { brightness: 0, contrast: 1, saturation: 1, warmth: 0 };
+  $("colBright").value = g.brightness; $("colContrast").value = g.contrast;
+  $("colSat").value = g.saturation; $("colWarm").value = g.warmth;
+  $("colTarget").textContent = selectedClips.size ? `${selectedClips.size} klip` : "Önce klip seç";
+}
+const saveColor = guard(async (reset) => {
+  if (!selectedClips.size) { status("Önce timeline'da bir klip seç", true); return; }
+  const args = reset ? { clip_ids: [...selectedClips] } : {
+    clip_ids: [...selectedClips], brightness: +$("colBright").value, contrast: +$("colContrast").value,
+    saturation: +$("colSat").value, warmth: +$("colWarm").value,
+  };
+  const r = await api("/api/edit", { tool: "color_correct", args });
+  status(r.result);
+  if (reset) fillColor();
+});
+function wireColor() {
+  $("clipColor").onclick = () => {
+    const p = $("colorPanel");
+    if (p.classList.contains("hidden")) fillColor();
+    p.classList.toggle("hidden");
+  };
+  $("colClose").onclick = () => $("colorPanel").classList.add("hidden");
+  for (const id of ["colBright", "colContrast", "colSat", "colWarm"]) $(id).addEventListener("change", () => saveColor(false));
+  $("colReset").onclick = () => saveColor(true);
+}
+
 // ------------------------------------------------------------------- wiring --
 function wire() {
   const roleSel = $("uploadRole");
@@ -767,6 +817,15 @@ function wire() {
     status(r.result);
   });
   wireCaptions();
+  wireColor();
+  $("clipTransition").onchange = guard(async () => {
+    const kind = $("clipTransition").value;
+    $("clipTransition").value = "";
+    if (!kind || !selectedClips.size) return;
+    const [, c] = findClip([...selectedClips][0]);
+    const r = await api("/api/edit", { tool: "add_transition", args: { time: c.start, kind, duration: kind === "crossfade" ? 0.6 : 0.8 } });
+    status(r.result);
+  });
   ["play", "pause", "ended"].forEach((n) => $("video").addEventListener(n, updatePlayButton));
   // Drag a recording from the list onto the timeline.
   const tlArea = $("tlScroll");

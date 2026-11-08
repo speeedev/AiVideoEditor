@@ -120,6 +120,10 @@ class AgentContext:
             desc = [f"[{a.role}]", "still image" if a.is_image else format_tc(a.duration)]
             if a.audio_stream:
                 desc.append(f"audio stream #{a.audio_stream}")
+            if a.stabilized:
+                desc.append("stabilised")
+            if a.uses_voice:
+                desc.append("voice isolated" + (f" (music {a.music_level:.0%})" if a.music_level else ""))
             if a.has_video:
                 desc.append(f"{info.get('width')}x{info.get('height')}"
                             + (f" {info['fps']:.3g}fps" if info.get("fps") else ""))

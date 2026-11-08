@@ -51,6 +51,7 @@ def _trim_start(c: Clip, new_start: float) -> None:
     c.start = new_start
     c.fade_in = 0.0
     c.zoom_in = 0.0
+    c.transition = "none"
 
 
 def _trim_end(c: Clip, new_end: float) -> None:

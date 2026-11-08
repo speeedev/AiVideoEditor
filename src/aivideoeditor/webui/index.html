@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Video Editor</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:,">
 </head>
 <body>
 <header class="topbar">
@@ -97,6 +98,13 @@
           <span id="clipText" class="small"></span>
           <button id="clipDelete" class="small" title="Sadece bu klibi kaldır, yeri boş kalsın (Delete)">Sil</button>
           <button id="clipRipple" class="small" title="Bu zaman aralığını bütün track'lerden kes, video kısalsın (Shift+Delete)">Sil ve boşluğu kapat</button>
+          <button id="clipColor" class="small" title="Seçili kliplerin rengini ayarla">🎨 Renk</button>
+          <select id="clipTransition" class="small" title="Bu klibe girişte geçiş">
+            <option value="">Geçiş…</option>
+            <option value="crossfade">Yumuşak geçiş (crossfade)</option>
+            <option value="dip_to_black">Siyaha geçiş</option>
+            <option value="none">Geçiş yok</option>
+          </select>
           <button id="clipClear" class="small">Seçimi kaldır</button>
         </span>
         <span id="selBox" class="sel-tools hidden">
@@ -206,6 +214,14 @@
   <label class="row"><input id="capHighlight" type="checkbox"> Konuşulan kelimeyi vurgula</label>
   <label class="row"><input id="capUpper" type="checkbox"> BÜYÜK HARF</label>
   <p class="small muted">Değişiklikler ön izleme karesinde hemen görünür.</p>
+</div>
+<div id="colorPanel" class="popover hidden">
+  <div class="row"><b>Renk düzeltme</b><span class="grow"></span><button id="colClose" class="small">✕</button></div>
+  <label class="row">Parlaklık <input id="colBright" type="range" min="-0.5" max="0.5" step="0.02"></label>
+  <label class="row">Kontrast <input id="colContrast" type="range" min="0.5" max="2" step="0.02"></label>
+  <label class="row">Doygunluk <input id="colSat" type="range" min="0" max="2.5" step="0.05"></label>
+  <label class="row">Sıcaklık <input id="colWarm" type="range" min="-1" max="1" step="0.05" title="Sol: soğuk/mavi, sağ: sıcak/turuncu"></label>
+  <div class="row"><span class="small muted" id="colTarget"></span><span class="grow"></span><button id="colReset" class="small">Sıfırla</button></div>
 </div>
 <div id="lightbox" class="lightbox hidden"><img alt=""></div>
 <div id="mediaPool" class="hidden"></div>

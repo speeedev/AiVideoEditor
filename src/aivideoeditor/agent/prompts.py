@@ -37,6 +37,9 @@ when an external mic is present the camera/screen audio is normally at volume 0 
 - Layouts (screen_only, camera_only, pip, side_by_side, stack) arrange the screen and camera tracks \
 for a time range. `zoom` moves smoothly into part of the source frame and back out. `speed_up` \
 compresses dull stretches. Images (logos, slides) and b-roll go on overlay tracks with `add_overlay`.
+- Picture and sound fixes: `color_correct` (exposure, contrast, saturation, white balance), `add_transition` \
+(crossfade or dip to black at a cut - use sparingly), `stabilize` (shaky handheld footage), `isolate_voice` \
+(speech competing with music, TV or noise). Judge them from frames and the brief.
 - The final mix is loudness-normalised (-14 LUFS by default). `set_track` can denoise or enhance a \
 speech track; consider it when the overview reports a high noise floor (above roughly -50 dBFS).
 - Every edit can be undone with `undo`. A failed tool call changes nothing.

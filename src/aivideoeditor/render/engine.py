@@ -76,8 +76,11 @@ class Segment:
     ends_clip: bool
     cont_prev: bool = False   # the previous clip on the track continues the same audio seamlessly
     cont_next: bool = False
+    tail: bool = False        # the continuing end of the previous clip under a crossfade
     video_input: int = -1
     audio_input: int = -1
+    music_input: int = -1
+    audio_stream: int | None = None
 
     @property
     def t0(self) -> float:
@@ -144,6 +147,20 @@ def collect_segments(tl: Timeline, assets: Mapping[str, AssetLike], f0: int, f1:
     for track in tl.tracks:
         clips = sorted(track.clips, key=lambda c: c.start)
         for i, clip in enumerate(clips):
+            prev = clips[i - 1] if i > 0 and abs(clips[i - 1].end - clip.start) < 1.5 / fps else None
+            xd = crossfade_length(clip, prev)
+            if xd:
+                # A crossfade fades this clip in over the continuing tail of the previous one.
+                tf0, tf1 = round(clip.start * fps), round((clip.start + xd) * fps)
+                t0, t1 = max(tf0, f0), min(tf1, f1)
+                tail = prev.model_copy(update={"source_out": prev.source_out + xd * prev.speed, "fade_in": 0.0,
+                                               "fade_out": xd, "transition": "none"})
+                tv = _visible(track, prev, assets)
+                ta = with_audio and _audible(track, prev, assets)
+                if t1 > t0 and (tv or ta):
+                    segs.append(Segment(track, tail, t0, t1, fps, tv, ta, starts_clip=False, ends_clip=False,
+                                        tail=True))
+                clip = clip.model_copy(update={"fade_in": max(clip.fade_in, xd)})
             cf0, cf1 = round(clip.start * fps), round(clip.end * fps)
             s0, s1 = max(cf0, f0), min(cf1, f1)
             if s1 <= s0:
@@ -159,9 +176,16 @@ def collect_segments(tl: Timeline, assets: Mapping[str, AssetLike], f0: int, f1:
     return segs
 
 
+def crossfade_length(clip: Clip, prev: Clip | None) -> float:
+    """Length of the crossfade into ``clip`` (0 when there is none)."""
+    if clip.transition != "crossfade" or prev is None:
+        return 0.0
+    return max(0.0, min(clip.transition_duration, clip.duration / 2))
+
+
 def _fade_windows(tl: Timeline, fps: float) -> list[tuple[int, int]]:
     """Frame ranges a chunk boundary must not fall inside (video fades are per segment)."""
-    out = []
+    out: list[tuple[int, int]] = []
     for t in tl.video_tracks:
         for c in t.clips:
             cf0, cf1 = round(c.start * fps), round(c.end * fps)
@@ -169,6 +193,12 @@ def _fade_windows(tl: Timeline, fps: float) -> list[tuple[int, int]]:
                 out.append((cf0, cf0 + math.ceil(c.fade_in * fps)))
             if c.fade_out > 0:
                 out.append((cf1 - math.ceil(c.fade_out * fps), cf1))
+    for t in tl.tracks:
+        clips = sorted(t.clips, key=lambda c: c.start)
+        for prev, c in zip(clips, clips[1:]):
+            xd = crossfade_length(c, prev if abs(prev.end - c.start) < 1.5 / fps else None)
+            if xd:
+                out.append((round(c.start * fps), round(c.start * fps) + math.ceil(xd * fps)))
     for x in tl.texts:
         d = animation_duration(x)
         if d > 0:
@@ -265,19 +295,39 @@ def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: f
         ow, oh = min(bw, _even(sw * scale)), min(bh, _even(sh * scale))
         filters.append(resize(ow, oh))
         x, y = bx + (bw - ow) // 2, by + (bh - oh) // 2
+    filters += color_filters(clip)
     filters.append("setsar=1")
-    needs_alpha = tr.opacity < 1 or (seg.starts_clip and clip.fade_in > 0) or (seg.ends_clip and clip.fade_out > 0)
-    if needs_alpha:
+    # Fades are evaluated in clip time, so a segment that starts inside a fade (a render chunk
+    # boundary, or a single still frame) gets the right opacity.
+    off = seg.t0 - clip.start
+    fade_in = clip.fade_in > 0 and not seg.tail and off < clip.fade_in
+    fade_out = clip.fade_out > 0 and not seg.tail and off + seg.duration > clip.duration - clip.fade_out
+    if tr.opacity < 1 or fade_in or fade_out:
         filters.append("format=yuva420p")
-        if seg.starts_clip and clip.fade_in > 0:
-            filters.append(f"fade=t=in:st=0:d={min(clip.fade_in, seg.duration):.3f}:alpha=1")
-        if seg.ends_clip and clip.fade_out > 0:
-            d = min(clip.fade_out, seg.duration)
-            filters.append(f"fade=t=out:st={seg.duration - d:.3f}:d={d:.3f}:alpha=1")
+        if fade_in or fade_out:
+            filters.append(f"setpts=PTS+{off:.6f}/TB")
+            if fade_in:
+                filters.append(f"fade=t=in:st=0:d={clip.fade_in:.4f}:alpha=1")
+            if fade_out:
+                filters.append(f"fade=t=out:st={max(0.0, clip.duration - clip.fade_out):.4f}:"
+                               f"d={clip.fade_out:.4f}:alpha=1")
+            filters.append(f"setpts=PTS-{off:.6f}/TB")
         if tr.opacity < 1:
             filters.append(f"colorchannelmixer=aa={tr.opacity:.3f}")
     filters.append(f"setpts=PTS+{seg.t0 - chunk_t0:.6f}/TB")
     return ",".join(filters), x, y
+
+
+def color_filters(clip: Clip) -> list[str]:
+    g = clip.color
+    if g is None or g.neutral:
+        return []
+    out = []
+    if abs(g.brightness) > 1e-3 or abs(g.contrast - 1) > 1e-3 or abs(g.saturation - 1) > 1e-3:
+        out.append(f"eq=brightness={g.brightness:.3f}:contrast={g.contrast:.3f}:saturation={g.saturation:.3f}")
+    if abs(g.warmth) > 1e-3:
+        out.append(f"colortemperature=temperature={6500 - g.warmth * 2500:.0f}:pl=0.5")
+    return out
 
 
 def _animated_zoom(clip: Clip, sw: int, sh: int) -> bool:
@@ -316,7 +366,7 @@ def _zoompan(seg: Segment, ow: int, oh: int, fps: str) -> str:
 MICRO_FADE = 0.008  # seconds; removes clicks at hard audio cuts
 
 
-def _audio_chain(seg: Segment, chunk_t0: float) -> str:
+def _audio_chain(seg: Segment, chunk_t0: float, gain: float = 1.0) -> str:
     clip = seg.clip
     # first_pts=0 pads with silence when the file's audio starts after the seek point
     # (e.g. camera files whose audio stream begins a few hundred ms after the video).
@@ -328,7 +378,7 @@ def _audio_chain(seg: Segment, chunk_t0: float) -> str:
         filters.append("afftdn=nr=14:nf=-45:tn=1")
     if seg.track.enhance:
         filters += ["highpass=f=80", "acompressor=threshold=-20dB:ratio=3:attack=8:release=160:makeup=2"]
-    gain = clip.volume * seg.track.volume
+    gain = gain * clip.volume * seg.track.volume
     # Requested fades are computed in clip time so they stay correct when a render chunk
     # boundary falls inside the fade.
     off = seg.t0 - clip.start
@@ -407,13 +457,19 @@ def build_chunk(
         asset = assets[seg.clip.asset_id]
         is_image = bool(asset.info.get("is_image"))
         proxy = st.proxies.get(seg.clip.asset_id) if want_video and seg.video else None
+        video_path = getattr(asset, "video_path", asset.path)
         if want_video and seg.video:
             shift = float(asset.info.get("video_start") or 0.0) if proxy else 0.0
-            seg.video_input = add_input(seg, proxy.path if proxy else asset.path, is_image, shift)
+            seg.video_input = add_input(seg, proxy.path if proxy else video_path, is_image, shift)
             if proxy:
                 dims[seg.video_input] = (proxy.width, proxy.height)
         if want_audio and seg.audio:
-            if seg.video_input >= 0 and proxy is None:
+            if getattr(asset, "uses_voice", False):
+                seg.audio_input = add_input(seg, asset.voice_path, False)
+                seg.audio_stream = 0
+                if asset.music_level > 0 and asset.music_path:
+                    seg.music_input = add_input(seg, asset.music_path, False)
+            elif seg.video_input >= 0 and proxy is None and video_path == asset.path:
                 seg.audio_input = seg.video_input
             else:
                 seg.audio_input = add_input(seg, asset.path, is_image)
@@ -486,9 +542,14 @@ def build_chunk(
         n = max(1, round(dur * AUDIO_RATE))
         voice, music = [], []
         for j, seg in enumerate(s for s in chunk.segments if s.audio):
-            stream = getattr(assets[seg.clip.asset_id], "audio_stream", 0)
+            asset = assets[seg.clip.asset_id]
+            stream = seg.audio_stream if seg.audio_stream is not None else getattr(asset, "audio_stream", 0)
             graph.append(f"[{seg.audio_input}:a:{stream}]{_audio_chain(seg, t0)}[a{j}]")
-            (music if seg.track.duck else voice).append(f"[a{j}]")
+            bus = music if seg.track.duck else voice
+            bus.append(f"[a{j}]")
+            if seg.music_input >= 0:     # separated music kept at a lower level under the voice
+                graph.append(f"[{seg.music_input}:a:0]{_audio_chain(seg, t0, gain=asset.music_level)}[a{j}m]")
+                bus.append(f"[a{j}m]")
 
         def bus(labels: list[str], name: str) -> str:
             graph.append(f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=end_sample={n}[{name}_sil]")

@@ -51,6 +51,10 @@ class Asset(BaseModel):
     notes: str = ""
     audio_stream: int = 0     # which audio stream of the file to use (e.g. OBS multi-track recordings)
     stabilized: str | None = None   # stabilised copy of the picture (cache/stabilized/<id>.mp4)
+    voice_path: str | None = None   # speech separated from music/noise (cache/separated/<id>_voice.wav)
+    music_path: str | None = None   # everything except the speech
+    audio_mode: Literal["original", "voice"] = "original"
+    music_level: float = 0.0        # with audio_mode "voice": how much of the separated music to keep
 
     @property
     def media(self) -> MediaInfo:
@@ -71,6 +75,10 @@ class Asset(BaseModel):
     @property
     def is_image(self) -> bool:
         return bool(self.info.get("is_image"))
+
+    @property
+    def uses_voice(self) -> bool:
+        return self.audio_mode == "voice" and bool(self.voice_path) and Path(self.voice_path).exists()
 
     @property
     def video_path(self) -> str:

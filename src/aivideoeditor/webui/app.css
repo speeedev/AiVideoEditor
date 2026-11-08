@@ -178,3 +178,8 @@ h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing
 .popover .presets { flex-wrap: wrap; justify-content: flex-start; }
 a.button { text-decoration: none; color: var(--text); }
 .popover label.row:has(input[type=checkbox]) { justify-content: flex-start; gap: 8px; }
+.asset-actions { flex-wrap: wrap; }
+.asset-actions button { font-size: 11px; }
+#colorPanel { right: 420px; top: auto; bottom: 330px; }
+.tl-toolbar { flex-wrap: wrap; row-gap: 4px; }
+#clipText, #selText { white-space: nowrap; }

@@ -12,6 +12,7 @@ const Live = {
   images: new Map(),  // image asset id -> HTMLImageElement
   titles: new Map(),  // text key -> HTMLImageElement
   frameEls: new Map(),
+  tails: new Map(),   // track id -> {clip, el}: previous clip continuing under a crossfade
 };
 
 function liveCanvas() { return document.getElementById("live"); }
@@ -20,9 +21,16 @@ function srcTime(c, t) { return c.source_in + (t - c.start) * c.speed; }
 function activeClip(track, t) { return track.clips.find((c) => c.start <= t && t < clipEnd(c)) || null; }
 function assetOf(id) { return S.assets.find((a) => a.id === id); }
 
+function crossfadeLen(c) {
+  return c.transition === "crossfade" ? Math.min(c.transition_duration, (clipEnd(c) - c.start) / 2) : 0;
+}
+function prevClip(track, c) {
+  return track.clips.find((p) => p !== c && Math.abs(clipEnd(p) - c.start) < 0.05) || null;
+}
 function clipFade(c, t) {
   let a = 1;
-  if (c.fade_in > 0) a = Math.min(a, (t - c.start) / c.fade_in);
+  const fi = Math.max(c.fade_in, crossfadeLen(c));
+  if (fi > 0) a = Math.min(a, (t - c.start) / fi);
   if (c.fade_out > 0) a = Math.min(a, (clipEnd(c) - t) / c.fade_out);
   return Math.max(0, Math.min(1, a));
 }
@@ -72,7 +80,10 @@ function wants(track, clip, kind) {
 }
 function syncTrack(track, t, playing) {
   const active = activeClip(track, t);
-  const next = track.clips.find((c) => c.start > t && c.start - t < 1.5) || null;
+  const xd = active ? crossfadeLen(active) : 0;
+  const tail = xd && t < active.start + xd ? prevClip(track, active) : null;   // under a crossfade
+  const next = tail ? null : (track.clips.find((c) => c.start > t && c.start - t < 1.5) || null);
+  Live.tails.delete(track.id);
   for (const kind of track.kind === "video" ? ["v", "a"] : ["a"]) {
     const els = pool(track.id, kind);
     let cur = null;
@@ -88,6 +99,21 @@ function syncTrack(track, t, playing) {
       if (kind === "a") cur.volume = Math.max(0, Math.min(1, active.volume * track.volume * clipFade(active, t)));
       if (playing && cur.paused) cur.play().catch(() => {});
       if (!playing && !cur.paused) cur.pause();
+    }
+    if (tail && wants(track, tail, kind)) {
+      // The previous clip keeps playing (past its out point) and fades out under the new one.
+      const tel = els.find((e) => e !== cur && e._clip === tail.id) || els.find((e) => e !== cur);
+      if (tel) {
+        load(tel, tail, kind);
+        const want = srcTime(tail, t);
+        if (tel.readyState >= 1 && Math.abs(tel.currentTime - want) > 0.3) tel.currentTime = want;
+        if (playing && tel.paused) tel.play().catch(() => {});
+        if (!playing && !tel.paused) tel.pause();
+        if (kind === "a") tel.volume = Math.max(0, Math.min(1, tail.volume * track.volume * (1 - (t - active.start) / xd)));
+        else Live.tails.set(track.id, { clip: tail, el: tel });
+      }
+      if (kind === "v") Live.frameEls.set(track.id, cur);
+      continue;
     }
     const spare = next && wants(track, next, kind) ? els.find((e) => e !== cur) : null;
     for (const e of els) if (e !== cur && e !== spare && !e.paused) e.pause();
@@ -147,10 +173,10 @@ function sizeCanvas() {
   const w = Math.max(2, Math.round(cv.width * scale)), h = Math.max(2, Math.round(cv.height * scale));
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
 }
-function drawClip(g, track, clip, t, W, H) {
+function drawClip(g, track, clip, t, W, H, el, fullAlpha) {
   const a = assetOf(clip.asset_id);
   if (!a || !a.has_video) return;
-  const src = a.is_image ? imageFor(a.id) : Live.frameEls.get(track.id);
+  const src = a.is_image ? imageFor(a.id) : (el || Live.frameEls.get(track.id));
   if (!src) return;
   const sw = a.is_image ? src.naturalWidth : src.videoWidth;
   const sh = a.is_image ? src.naturalHeight : src.videoHeight;
@@ -172,7 +198,7 @@ function drawClip(g, track, clip, t, W, H) {
     const vw = bw / s, vh = bh / s;
     sx += (sW - vw) / 2; sy += (sH - vh) / 2; sW = vw; sH = vh;
   }
-  g.globalAlpha = tr.opacity * clipFade(clip, t);
+  g.globalAlpha = tr.opacity * (fullAlpha ? 1 : clipFade(clip, t));
   g.filter = colorFilter(clip);
   g.drawImage(src, sx, sy, sW, sH, dx, dy, dw, dh);
   g.filter = "none";
@@ -247,6 +273,8 @@ function liveDraw(t) {
   for (const track of S.timeline.tracks) {                 // video tracks bottom layer first
     if (track.kind !== "video" || track.hidden) continue;
     const clip = activeClip(track, t);
+    const tail = Live.tails.get(track.id);
+    if (tail && tail.clip.visible) drawClip(g, track, tail.clip, t, W, H, tail.el, true);
     if (clip && clip.visible) drawClip(g, track, clip, t, W, H);
   }
   drawTitles(g, t, W, H);

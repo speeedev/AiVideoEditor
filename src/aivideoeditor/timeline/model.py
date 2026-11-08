@@ -74,6 +74,20 @@ class Transform(BaseModel):
         return self
 
 
+class ColorGrade(BaseModel):
+    """Simple colour correction of a video clip."""
+
+    brightness: float = Field(0.0, ge=-0.5, le=0.5)
+    contrast: float = Field(1.0, ge=0.5, le=2.0)
+    saturation: float = Field(1.0, ge=0.0, le=2.5)
+    warmth: float = Field(0.0, ge=-1.0, le=1.0)      # -1 cool/blue .. +1 warm/orange
+
+    @property
+    def neutral(self) -> bool:
+        return (abs(self.brightness) < 1e-3 and abs(self.contrast - 1) < 1e-3
+                and abs(self.saturation - 1) < 1e-3 and abs(self.warmth) < 1e-3)
+
+
 class Clip(BaseModel):
     id: str
     asset_id: str
@@ -86,6 +100,9 @@ class Clip(BaseModel):
     fade_out: float = 0.0
     zoom_in: float = 0.0      # seconds to animate from the full frame into transform.crop
     zoom_out: float = 0.0     # seconds to animate from transform.crop back to the full frame
+    color: ColorGrade | None = None
+    transition: Literal["none", "crossfade"] = "none"   # how this clip enters from the previous one
+    transition_duration: float = 0.5
     visible: bool = True
     transform: Transform = Field(default_factory=Transform)
     label: str = ""

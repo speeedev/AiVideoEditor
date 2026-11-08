@@ -49,7 +49,7 @@ def _fresh(asset: "Asset", entry: dict | None) -> bool:
     if not entry or not Path(entry.get("path", "")).exists():
         return False
     try:
-        st = Path(asset.path).stat()
+        st = Path(asset.video_path).stat()
     except OSError:
         return False
     return entry.get("source_size") == st.st_size and abs(entry.get("source_mtime", 0) - st.st_mtime) < 1e-3
@@ -70,14 +70,14 @@ def ensure_proxy(project: "Project", asset: "Asset", *, log=print) -> Proxy | No
     out = project.cache_dir("proxies") / f"{asset.id}.mp4"
     log(f"[{asset.id}] creating editing proxy…")
     run_ffmpeg([
-        "-i", asset.path, "-map", "0:v:0", "-an",
+        "-i", asset.video_path, "-map", "0:v:0", "-an",
         "-vf", f"scale=-2:{PROXY_HEIGHT}:flags=area,format=yuv420p",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
         "-g", "15", "-keyint_min", "15", "-sc_threshold", "0",
         "-fps_mode", "passthrough", "-movflags", "+faststart", "-y", str(out),
     ])
     info = probe(out)
-    st = Path(asset.path).stat()
+    st = Path(asset.video_path).stat()
     proxy = Proxy(str(out), int(info.width or 0), int(info.height or 0), st.st_size, st.st_mtime)
     manifest[asset.id] = asdict(proxy)
     _manifest_path(project).write_text(json.dumps(manifest, indent=1), encoding="utf-8")
