@@ -15,6 +15,8 @@ from .prompts import SYSTEM_PROMPT, initial_user_message
 from .tools import run_tool, tool_definitions
 
 DEFAULT_MODEL = "claude-opus-5-5"
+INTERRUPTED = ("The run was interrupted around this tool call; it may or may not have been applied. "
+               "Re-read the timeline (get_timeline / get_transcript) before continuing.")
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # USD per million (input, output) tokens; used only for the cost estimate shown to the user.
 PRICES = {
@@ -91,7 +93,7 @@ class AgentContext:
     def overview(self) -> str:
         proj = self.session.project
         d = proj.data
-        cv = d.canvas
+        cv = self.session.timeline.canvas
         lines = [f"Project: {d.name}"]
         if d.brief:
             lines.append(f"Brief: {d.brief}")
@@ -214,7 +216,7 @@ class EditAgent:
         if uses:
             self.messages.append({"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": b["id"], "is_error": True,
-                 "content": "Interrupted before this tool ran; it did not change anything."} for b in uses]})
+                 "content": INTERRUPTED} for b in uses]})
 
     def _log(self, record: dict[str, Any]) -> None:
         record = {"ts": time.time(), **record}
@@ -321,23 +323,35 @@ class EditAgent:
                 finished = True
                 break
 
-            results = []
-            for b in uses:
-                name, args = b["name"], b.get("input")
-                tool_names.append(name)
-                self.display.tool_call(name, args)
-                if stop_reason == "max_tokens":
-                    out, is_error = ("The response hit max_tokens and this tool input may be truncated; it was not "
-                                     "run. Retry with smaller steps.", True)
-                else:
-                    out, is_error = run_tool(self.ctx, name, args)
-                self.display.tool_result(name, out, is_error)
-                self._log({"event": "tool", "name": name, "input": args, "is_error": is_error,
-                           "result": out if isinstance(out, str) else "[content blocks]"})
-                block: dict[str, Any] = {"type": "tool_result", "tool_use_id": b["id"], "content": out}
-                if is_error:
-                    block["is_error"] = True
-                results.append(block)
+            results: list[dict[str, Any]] = []
+            try:
+                for b in uses:
+                    name, args = b["name"], b.get("input")
+                    tool_names.append(name)
+                    self.display.tool_call(name, args)
+                    if stop_reason == "max_tokens":
+                        out, is_error = ("The response hit max_tokens and this tool input may be truncated; it "
+                                         "was not run. Retry with smaller steps.", True)
+                    else:
+                        out, is_error = run_tool(self.ctx, name, args)
+                    self.display.tool_result(name, out, is_error)
+                    self._log({"event": "tool", "name": name, "input": args, "is_error": is_error,
+                               "result": out if isinstance(out, str) else "[content blocks]"})
+                    block: dict[str, Any] = {"type": "tool_result", "tool_use_id": b["id"], "content": out}
+                    if is_error:
+                        block["is_error"] = True
+                    results.append(block)
+            except BaseException:
+                # Interrupted (Ctrl+C, crash) in the middle of a batch: record what really
+                # happened so the next run does not repeat or forget completed edits.
+                done = {r["tool_use_id"] for r in results}
+                for b in uses:
+                    if b["id"] not in done:
+                        results.append({"type": "tool_result", "tool_use_id": b["id"], "is_error": True,
+                                        "content": INTERRUPTED})
+                self.messages.append({"role": "user", "content": results})
+                self.save_conversation()
+                raise
             self.messages.append({"role": "user", "content": results})
             self.save_conversation()
 

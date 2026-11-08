@@ -132,6 +132,8 @@ class App:
 
     # -- actions ----------------------------------------------------------------
     def add_asset(self, path: str, role: str) -> dict:
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
         with self.lock:
             a = self.project.add_asset(path, role)
         self.bus.publish({"type": "state"})
@@ -155,6 +157,8 @@ class App:
         self.start_job("sync", run)
 
     def assemble(self, layout: str | None) -> None:
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
         with self.lock:
             self.session.assemble(layout=layout or None)
         self.bus.publish({"type": "state"})
@@ -438,8 +442,13 @@ def make_handler(app: App):
                 m = re.fullmatch(r"/api/assets/([^/]+)", path)
                 if m:
                     aid = unquote(m.group(1))
+                    if app.job:
+                        raise Busy(f"'{app.job}' is still running")
                     with app.lock:
                         asset = app.project.asset(aid)
+                        if body.get("delete") and app.project.timeline.clips_of_asset(aid):
+                            raise ValueError(f"'{aid}' is used by the timeline; remove its clips or rebuild "
+                                             "the timeline first")
                         if "role" in body:
                             if body["role"] not in ROLES:
                                 return self._error("invalid role")

@@ -126,8 +126,8 @@ class Project:
             self._timeline = Timeline(canvas=self._data.canvas)
 
     def save(self) -> None:
-        self.project_file.write_text(self.data.model_dump_json(indent=2), encoding="utf-8")
-        self.timeline_file.write_text(self.timeline.model_dump_json(indent=2), encoding="utf-8")
+        _atomic_write(self.project_file, self.data.model_dump_json(indent=2))
+        _atomic_write(self.timeline_file, self.timeline.model_dump_json(indent=2))
 
     @property
     def data(self) -> ProjectFile:
@@ -237,14 +237,26 @@ class Project:
         hist = self.root / "history"
         hist.mkdir(exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        n = len(list(hist.glob("*.json")))
-        name = f"{n:04d}-{stamp}{('-' + _slug(label)[:40]) if label else ''}.json"
+        existing = self.history()
+        n = _history_index(existing[-1]) + 1 if existing else 0
+        name = f"{n:06d}-{stamp}{('-' + _slug(label)[:40]) if label else ''}.json"
         p = hist / name
-        p.write_text(self.timeline.model_dump_json(indent=1), encoding="utf-8")
+        _atomic_write(p, self.timeline.model_dump_json(indent=1))
         return p
 
     def history(self) -> list[Path]:
-        return sorted((self.root / "history").glob("*.json"))
+        return sorted((self.root / "history").glob("*.json"), key=_history_index)
+
+
+def _history_index(p: Path) -> int:
+    head = p.name.split("-", 1)[0]
+    return int(head) if head.isdigit() else -1
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def _slug(s: str) -> str:

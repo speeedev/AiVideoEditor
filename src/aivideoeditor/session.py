@@ -37,12 +37,16 @@ class EditorSession:
         self.project.snapshot(label)
         self._redo.clear()
 
-    def _pop_snapshot(self) -> Timeline | None:
+    def _pop_snapshot(self, *, check_assets: bool = False) -> Timeline | None:
         hist = self.project.history()
         if not hist:
             return None
         last = hist[-1]
         tl = Timeline.model_validate_json(last.read_text(encoding="utf-8"))
+        if check_assets:
+            missing = sorted({c.asset_id for _, c in tl.all_clips()} - set(self.project.assets))
+            if missing:
+                raise EditError(f"cannot undo: that version uses removed asset(s) {', '.join(missing)}")
         last.unlink()
         return tl
 
@@ -53,7 +57,7 @@ class EditorSession:
             self.project.timeline = tl
 
     def undo(self) -> bool:
-        tl = self._pop_snapshot()
+        tl = self._pop_snapshot(check_assets=True)
         if tl is None:
             return False
         self._redo.append(self.timeline.model_dump_json())

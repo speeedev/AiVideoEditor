@@ -232,6 +232,9 @@ def ripple_delete(tl: Timeline, ranges: Iterable[Sequence[float]],
     merged = _merge_ranges(ranges)
     removed = 0.0
     for a, b in reversed(merged):
+        end = tl.duration
+        if a >= end - EPS:
+            continue
         for track in _tracks(tl, track_ids, include_locked=False):
             lift_track(tl, track, a, b)
             for c in track.clips:
@@ -240,8 +243,35 @@ def ripple_delete(tl: Timeline, ranges: Iterable[Sequence[float]],
             track.sort()
         if track_ids is None:
             _ripple_overlays(tl, a, b)
-        removed += b - a
+        removed += min(b, end) - a
+    fit_music(tl)
     return removed
+
+
+def content_end(tl: Timeline) -> float:
+    """End of the edit ignoring music beds (which are locked and do not follow cuts)."""
+    ends = [t.end for t in tl.tracks if t.role != "music"] + [x.end for x in tl.texts]
+    return max(ends, default=0.0)
+
+
+def fit_music(tl: Timeline, *, fade: float = 2.0) -> None:
+    """Trim music beds that run past the end of the content, keeping a fade-out."""
+    end = content_end(tl)
+    if end <= 0:
+        return
+    for t in tl.tracks:
+        if t.role != "music":
+            continue
+        kept = []
+        for c in t.clips:
+            if c.start >= end - MIN_CLIP:
+                continue
+            if c.end > end + EPS:
+                fo = max(c.fade_out, fade)
+                _trim_end(c, end)
+                c.fade_out = min(fo, c.duration / 2)
+            kept.append(c)
+        t.clips = kept
 
 
 def _ripple_overlays(tl: Timeline, a: float, b: float) -> None:
@@ -274,12 +304,12 @@ def lift(tl: Timeline, a: float, b: float, track_ids: Sequence[str] | None = Non
 
 
 def delete_clips(tl: Timeline, clip_ids: Sequence[str], *, ripple: bool = False) -> None:
-    for cid in clip_ids:
-        track, clip = tl.find_clip(cid)
-        a, b = clip.start, clip.end
+    found = [tl.find_clip(cid) for cid in dict.fromkeys(clip_ids)]   # validate all ids first
+    ranges = [(clip.start, clip.end) for _, clip in found]
+    for track, clip in found:
         track.clips.remove(clip)
-        if ripple:
-            ripple_delete(tl, [(a, b)])
+    if ripple:
+        ripple_delete(tl, ranges)
 
 
 def trim_clip(tl: Timeline, clip_id: str, *, start: float | None = None, end: float | None = None) -> Clip:
@@ -370,6 +400,14 @@ def speed_range(tl: Timeline, a: float, b: float, factor: float, *,
             if c.start >= a - EPS and c.end <= b + EPS:
                 inside.append(c)
     shift_after(tl, b, new - old, ids if track_ids else None)
+    if track_ids is None:
+        def remap(t: float) -> float:
+            return a + (t - a) / factor if a < t < b else t
+        for x in tl.texts:
+            if x.start < b and x.end > a:
+                x.start, x.end = remap(x.start), (remap(x.end) if x.end <= b else x.end + new - old)
+        for m in tl.markers:
+            m.time = remap(m.time)
     for c in inside:
         # Re-read the start: the clip was not shifted (it starts before b).
         c.start = a + (c.start - a) / factor
@@ -378,6 +416,7 @@ def speed_range(tl: Timeline, a: float, b: float, factor: float, *,
             c.volume = 0.0
     for track in tracks:
         track.sort()
+    fit_music(tl)
     return new
 
 

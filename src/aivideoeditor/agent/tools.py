@@ -813,8 +813,6 @@ def set_canvas(ctx, args: SetCanvasIn) -> ToolOutput:
     tl.canvas.width, tl.canvas.height = w, h
     if args.fps:
         tl.canvas.fps = args.fps
-    proj = ctx.session.project
-    proj.data.canvas = tl.canvas.model_copy()
     return f"Canvas is now {w}x{h} @ {tl.canvas.fps:g} fps."
 
 

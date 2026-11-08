@@ -152,3 +152,34 @@ def test_describe_and_validate_overlap():
     assert "V1" in text and "camera" in text
     tl.track("V1").clips.append(tl.track("V1").clips[0].model_copy(update={"id": "dup", "start": 10}))
     assert any("overlap" in p for p in validate(tl, DUR))
+
+
+def test_review_regressions():
+    # delete_clips with ripple over several clips covering the same range
+    tl = make_tl()
+    ops.split_at(tl, 10)
+    ops.split_at(tl, 20)
+    ids = [tl.track("V1").clip_at(15).id, tl.track("V2").clip_at(15).id]
+    ops.delete_clips(tl, ids, ripple=True)
+    assert tl.duration == pytest.approx(50) and offsets_consistent(tl)
+    # removed time is clamped to the timeline
+    assert ops.ripple_delete(tl, [(45, 90)]) == pytest.approx(5)
+    # speed_range remaps texts and markers inside the range
+    tl = make_tl()
+    x = ops.add_text(tl, 12, 18, "inside")
+    y = ops.add_text(tl, 25, 35, "straddles")
+    m = ops.add_marker(tl, 25, "m")
+    ops.speed_range(tl, 10, 30, 4)
+    assert (x.start, x.end) == pytest.approx((10.5, 12.0))
+    assert (y.start, y.end) == pytest.approx((13.75, 20.0))
+    assert m.time == pytest.approx(13.75)
+
+
+def test_music_bed_follows_content_end():
+    tl = make_tl()
+    music = ops.add_track(tl, "audio", role="music")
+    ops.place_clip(tl, music.id, "bed", 0, 60, 0)
+    music.locked = True
+    ops.ripple_delete(tl, [(10, 30)])
+    assert tl.duration == pytest.approx(40)
+    assert music.clips[0].end == pytest.approx(40) and music.clips[0].fade_out >= 2.0

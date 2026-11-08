@@ -38,7 +38,8 @@ def camera_aspect(project: "Project") -> float:
 
 
 def assemble(project: "Project", *, layout: str | None = None) -> Timeline:
-    tl = Timeline(canvas=project.data.canvas.model_copy())
+    # The current timeline's canvas wins (it may have been changed, e.g. to vertical).
+    tl = Timeline(canvas=project.timeline.canvas.model_copy())
     assets = [a for a in project.assets.values()
               if (a.role in VIDEO_ROLES and a.has_video) or (a.role in AUDIO_ROLES and a.has_audio)]
     if not assets:

@@ -163,3 +163,31 @@ def test_failed_mutation_rolls_back(session):
 def test_every_tool_has_a_handler():
     for name, spec in REGISTRY.items():
         assert callable(spec.handler), name
+
+
+def test_interrupted_batch_records_completed_calls(session, monkeypatch):
+    from aivideoeditor.agent import tools as tools_mod
+
+    def boom(ctx, args):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(tools_mod.REGISTRY["render_preview"], "handler", boom)
+    client = FakeClient([[use(1, "ripple_delete", ranges=[{"start": 0, "end": 1}], snap_to_pauses=False),
+                          use(2, "render_preview")]])
+    agent = EditAgent(session, client=client)
+    with pytest.raises(KeyboardInterrupt):
+        agent.run("x", new_conversation=True)
+    saved = json.loads((session.project.root / "agent" / "conversation.json").read_text())
+    results = saved[-1]["content"]
+    assert results[0]["tool_use_id"] == "toolu_1" and not results[0].get("is_error")
+    assert results[1]["tool_use_id"] == "toolu_2" and results[1]["is_error"]
+    assert "may or may not" in results[1]["content"]
+
+
+def test_canvas_change_is_undoable(session):
+    ctx = NS(session=session)
+    original = session.project.data.canvas.model_copy()
+    out, err = run_tool(ctx, "set_canvas", {"preset": "vertical_1080x1920"})
+    assert not err and session.timeline.canvas.height == 1920
+    assert session.project.data.canvas == original
+    run_tool(ctx, "undo", {})
+    assert session.timeline.canvas.width == original.width
