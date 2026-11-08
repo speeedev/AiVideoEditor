@@ -6,6 +6,8 @@ gerçek bir editör gibi araçlarla düzenler: keser, sıkılaştırır, layout 
 hızlandırır, yazı, altyazı ve müzik ekler. Sonuç FFmpeg ile render edilir ya da Premiere, DaVinci Resolve
 veya Final Cut'a aktarılır.
 
+![Web arayüzü: kayıtlar, kompozit kare, timeline ve Claude paneli](docs/ui.jpg)
+
 ```
 Kayıtlar ─► Analiz ─────────► Timeline ◄────► Claude (araç kullanımı) ─► Render (FFmpeg)
             transkript         track'ler,       "şu aralığı kes,           ön izleme / final
@@ -76,6 +78,8 @@ Tarayıcıda açılan editörde:
    kelime vurgulu altyazı ekle". Claude'un düşüncelerini, kullandığı araçları ve baktığı kareleri
    canlı izlersin. Timeline da gözünün önünde güncellenir.
 5. Timeline'a tıklayınca o anın **kompozit karesi** görünür (layout, zoom, yazı ve altyazı dahil).
+   Sürükleyerek bir **aralık seçebilirsin**: seçimi tek tıkla kesebilir (Delete), bir layout
+   uygulayabilir ya da Claude'a "seçili aralığı…" diye talimat verebilirsin.
 6. *Ön izleme render* ile videoyu izle, sonra "girişi biraz daha kısalt" gibi talimatlarla devam et.
    Her değişiklik geri alınabilir (Ctrl+Z).
 7. *Final render* tam kalite MP4 üretir. *Dışa aktar* ile Premiere veya Resolve'a geçebilirsin.

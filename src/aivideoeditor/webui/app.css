@@ -135,3 +135,5 @@ h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing
   border-right: 1px solid var(--accent); z-index: 3; pointer-events: none; margin-left: 90px; }
 .sel-tools { display: flex; gap: 6px; align-items: center; }
 .sel-tools select { padding: 2px 6px; font-size: 12px; }
+.sel-tools #selText, #tlInfo { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tlInfo { min-width: 0; }
