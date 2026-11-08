@@ -38,13 +38,13 @@ def ffprobe_bin() -> str:
 
 
 def run_ffmpeg(args: Sequence[str], *, capture_stdout: bool = False,
-               cwd: str | os.PathLike | None = None) -> subprocess.CompletedProcess:
+               cwd: str | os.PathLike | None = None, loglevel: str = "error") -> subprocess.CompletedProcess:
     """Run ffmpeg with the given arguments (without the binary name).
 
     stderr is always captured so errors can be reported; stdout is captured
     as bytes when ``capture_stdout`` is set (used for raw PCM/frame pipes).
     """
-    cmd = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-loglevel", "error", *args]
+    cmd = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-loglevel", loglevel, *args]
     proc = subprocess.run(
         cmd,
         stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,

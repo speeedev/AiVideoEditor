@@ -13,6 +13,10 @@ import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    import numpy as np
 
 
 @dataclass
@@ -76,7 +80,7 @@ DEFAULT_PROMPTS = {
 
 
 def transcribe(
-    path: str | Path,
+    audio: "str | Path | np.ndarray",
     *,
     model: str = "small",
     language: str | None = None,
@@ -96,7 +100,7 @@ def transcribe(
     whisper = WhisperModel(model, device=device, compute_type=compute_type)
     prompt = initial_prompt if initial_prompt is not None else DEFAULT_PROMPTS.get(language or "", None)
     segments, info = whisper.transcribe(
-        str(path),
+        audio if not isinstance(audio, (str, Path)) else str(audio),
         language=language,
         word_timestamps=True,
         vad_filter=False,  # keep pauses; we detect them ourselves

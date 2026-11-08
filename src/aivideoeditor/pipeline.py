@@ -29,15 +29,17 @@ def analyze_asset(
     asset = project.asset(asset_id)
     if asset.has_audio and (force or project.speech(asset_id) is None):
         log(f"[{asset_id}] detecting speech and pauses…")
-        samples = decode_audio(asset.path, 16000)
+        samples = decode_audio(asset.path, 16000, stream=asset.audio_stream)
         project.save_speech(asset_id, analyze_speech(samples, 16000))
-    if asset.has_video and asset.role in ("screen", "camera", "broll") and (force or project.visual(asset_id) is None):
+    if (asset.has_video and not asset.is_image and asset.role in ("screen", "camera", "broll")
+            and (force or project.visual(asset_id) is None)):
         log(f"[{asset_id}] analysing visual activity and scene cuts…")
         project.save_visual(asset_id, analyze_visual(asset.path))
     if (do_transcribe and asset.has_audio and asset.role in SPEECH_ROLES
             and (force or project.transcript(asset_id) is None)):
         log(f"[{asset_id}] transcribing with faster-whisper ({whisper_model})…")
-        project.save_transcript(asset_id, transcribe(asset.path, model=whisper_model, language=language))
+        audio = decode_audio(asset.path, 16000, stream=asset.audio_stream)
+        project.save_transcript(asset_id, transcribe(audio, model=whisper_model, language=language))
 
 
 def analyze_project(project: Project, *, do_transcribe: bool = True, whisper_model: str = "small",
@@ -62,7 +64,7 @@ def sync_project(project: Project, *, reference: str | None = None, max_offset: 
     project.data.sync_reference = ref_id
     ref.sync = SyncInfo(reference=ref_id, offset=0.0, confidence=100.0, method="reference")
     log(f"sync reference: {ref_id}")
-    ref_audio = decode_audio(ref.path, SYNC_SR)
+    ref_audio = decode_audio(ref.path, SYNC_SR, stream=ref.audio_stream)
     results: dict[str, SyncInfo] = {ref_id: ref.sync}
     for aid, asset in project.assets.items():
         if aid == ref_id or asset.role not in ("screen", "camera", "mic"):
@@ -76,7 +78,7 @@ def sync_project(project: Project, *, reference: str | None = None, max_offset: 
             asset.sync = SyncInfo(reference=ref_id, offset=0.0, confidence=0.0, method="assumed")
             results[aid] = asset.sync
             continue
-        other = decode_audio(asset.path, SYNC_SR)
+        other = decode_audio(asset.path, SYNC_SR, stream=asset.audio_stream)
         res = find_offset_arrays(ref_audio, other, SYNC_SR, max_offset=max_offset)
         method = "audio" if res.reliable else "audio-uncertain"
         asset.sync = SyncInfo(reference=ref_id, offset=res.offset, drift_ppm=res.drift_ppm,

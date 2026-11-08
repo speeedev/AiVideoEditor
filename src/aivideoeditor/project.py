@@ -48,6 +48,7 @@ class Asset(BaseModel):
     info: dict = Field(default_factory=dict)
     sync: SyncInfo | None = None
     notes: str = ""
+    audio_stream: int = 0     # which audio stream of the file to use (e.g. OBS multi-track recordings)
 
     @property
     def media(self) -> MediaInfo:
@@ -64,6 +65,10 @@ class Asset(BaseModel):
     @property
     def has_audio(self) -> bool:
         return bool(self.info.get("has_audio"))
+
+    @property
+    def is_image(self) -> bool:
+        return bool(self.info.get("is_image"))
 
 
 class ProjectFile(BaseModel):
@@ -151,7 +156,7 @@ class Project:
             raise KeyError(f"unknown asset '{asset_id}'. Known assets: {known}") from None
 
     def add_asset(self, path: str | Path, role: str = "other", asset_id: str | None = None,
-                  notes: str = "") -> Asset:
+                  notes: str = "", audio_stream: int = 0) -> Asset:
         path = Path(path).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(path)
@@ -160,13 +165,17 @@ class Project:
         info = probe(path)
         if not (info.has_video or info.has_audio):
             raise ValueError(f"{path} has neither audio nor video streams")
-        base = asset_id or _slug(path.stem) or role
+        if audio_stream and audio_stream >= info.audio_streams:
+            raise ValueError(f"{path.name} has {info.audio_streams} audio stream(s); "
+                             f"audio_stream {audio_stream} does not exist")
+        base = asset_id or (_slug(path.stem) + (f"_a{audio_stream}" if audio_stream else "")) or role
         aid = base
         i = 2
         while aid in self.data.assets:
             aid = f"{base}_{i}"
             i += 1
-        asset = Asset(id=aid, path=str(path), role=role, info=info.to_dict(), notes=notes)  # type: ignore[arg-type]
+        asset = Asset(id=aid, path=str(path), role=role, info=info.to_dict(), notes=notes,  # type: ignore[arg-type]
+                      audio_stream=audio_stream)
         self.data.assets[aid] = asset
         self.save()
         return asset

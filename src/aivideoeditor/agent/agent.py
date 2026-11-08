@@ -80,7 +80,9 @@ class AgentContext:
         lines.append("Assets:")
         for a in proj.assets.values():
             info = a.info
-            desc = [f"[{a.role}]", format_tc(a.duration)]
+            desc = [f"[{a.role}]", "still image" if a.is_image else format_tc(a.duration)]
+            if a.audio_stream:
+                desc.append(f"audio stream #{a.audio_stream}")
             if a.has_video:
                 desc.append(f"{info.get('width')}x{info.get('height')}"
                             + (f" {info['fps']:.3g}fps" if info.get("fps") else ""))
@@ -105,7 +107,8 @@ class AgentContext:
             sp = proj.speech(a.id)
             if sp is not None:
                 talk = sum(b - x for x, b in sp.speech)
-                have.append(f"pauses (speech {100 * talk / max(sp.duration, 1e-6):.0f}% of the recording)")
+                have.append(f"pauses (speech {100 * talk / max(sp.duration, 1e-6):.0f}% of the recording, "
+                            f"noise floor {sp.noise_floor_db:.0f} dBFS)")
             vis = proj.visual(a.id)
             if vis is not None:
                 have.append(f"visual activity ({len(vis.active)} active spans, {len(vis.scene_cuts)} hard cuts)")

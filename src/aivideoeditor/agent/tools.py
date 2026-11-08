@@ -163,6 +163,29 @@ class SetTrackIn(BaseModel):
     locked: bool | None = Field(None, description="Locked tracks are not affected by ripple edits")
     duck: bool | None = Field(None, description="Audio: automatically lower this track under speech")
     volume: float | None = Field(None, ge=0, le=4)
+    denoise: bool | None = Field(None, description="Audio: reduce steady background noise (fan, hum, room)")
+    enhance: bool | None = Field(None, description="Audio: voice polish (rumble high-pass + gentle compression)")
+
+
+class AudioMasteringIn(BaseModel):
+    normalize: bool = Field(True, description="Normalise the final mix to the loudness target")
+    target_lufs: float = Field(-14.0, ge=-30, le=-8, description="-14 for YouTube/streaming, -16 for podcasts")
+
+
+POSITIONS_9 = Literal["top_left", "top", "top_right", "left", "center", "right",
+                      "bottom_left", "bottom", "bottom_right", "full"]
+
+
+class AddOverlayIn(BaseModel):
+    asset_id: str = Field(description="Image (logo, slide, screenshot) or video (b-roll) asset")
+    start: float = Field(description="Timeline start")
+    end: float = Field(description="Timeline end")
+    source_in: float = Field(0.0, description="Video assets: start inside the file")
+    position: POSITIONS_9 = "top_right"
+    size: float = Field(0.18, gt=0.02, le=1.0, description="Width as a fraction of the canvas (ignored for 'full')")
+    opacity: float = Field(1.0, gt=0, le=1)
+    fade: float = Field(0.3, ge=0, le=3, description="Fade in/out seconds")
+    volume: float = Field(0.0, ge=0, le=2, description="Video overlays: audio level (0 = silent)")
 
 
 class MoveClipIn(BaseModel):
@@ -208,6 +231,8 @@ class ZoomIn(BaseModel):
     end: float
     region: RectIn | None = Field(description="Region of the source frame to fill the box with; null resets")
     track_id: str | None = Field(None, description="Video track (default: the screen track)")
+    ease: float = Field(0.4, ge=0, le=2, description="Seconds of smooth zoom-in at the start and zoom-out at the "
+                                                     "end of the range; 0 = instant punch-in")
 
 
 class SpeedUpIn(BaseModel):
@@ -554,7 +579,60 @@ def set_track(ctx, args: SetTrackIn) -> ToolOutput:
     """Change track properties: mute, hide, lock (exclude from ripple edits), duck under speech, volume, name."""
     props = args.model_dump(exclude={"track_id"})
     t = ops.set_track(ctx.session.timeline, args.track_id, **props)
-    return f"Track {t.id}: muted={t.muted} hidden={t.hidden} locked={t.locked} duck={t.duck} volume={t.volume}."
+    return (f"Track {t.id}: muted={t.muted} hidden={t.hidden} locked={t.locked} duck={t.duck} volume={t.volume} "
+            f"denoise={t.denoise} enhance={t.enhance}.")
+
+
+@tool("set_audio_mastering", AudioMasteringIn, mutates=True)
+def set_audio_mastering(ctx, args: AudioMasteringIn) -> ToolOutput:
+    """Loudness normalisation of the final mix (on by default at -14 LUFS)."""
+    tl = ctx.session.timeline
+    tl.audio.normalize = args.normalize
+    tl.audio.target_lufs = args.target_lufs
+    return f"Final mix normalisation {'on at ' + str(args.target_lufs) + ' LUFS' if args.normalize else 'off'}."
+
+
+def _overlay_box(position: str, size: float, aspect: float, canvas_aspect: float) -> tuple[float, float, float, float]:
+    if position == "full":
+        return 0.0, 0.0, 1.0, 1.0
+    w = size
+    h = min(1.0, w * canvas_aspect / aspect)
+    if h >= 1.0:
+        h, w = 1.0, aspect / canvas_aspect
+    mx, my = 0.03 / canvas_aspect, 0.03
+    col = "left" if "left" in position else "right" if "right" in position else "center"
+    row = "top" if position.startswith("top") else "bottom" if position.startswith("bottom") else "middle"
+    x = mx if col == "left" else 1 - w - mx if col == "right" else (1 - w) / 2
+    y = my if row == "top" else 1 - h - my if row == "bottom" else (1 - h) / 2
+    return max(0.0, x), max(0.0, y), w, h
+
+
+@tool("add_overlay", AddOverlayIn, mutates=True)
+def add_overlay(ctx, args: AddOverlayIn) -> ToolOutput:
+    """Show an image (logo, slide, screenshot) or a b-roll video above everything else for a time range, on an
+    overlay track that ripple edits keep in place relative to the content."""
+    proj = ctx.session.project
+    tl = ctx.session.timeline
+    asset = proj.asset(args.asset_id)
+    if not asset.has_video:
+        raise EditError(f"{args.asset_id} has no picture")
+    if args.end <= args.start:
+        raise EditError("end must be after start")
+    length = args.end - args.start
+    if not asset.is_image and args.source_in + length > asset.duration + 0.05:
+        raise EditError(f"{args.asset_id} is only {asset.duration:.2f}s long")
+    w, h = asset.info.get("width") or 16, asset.info.get("height") or 9
+    x, y, bw, bh = _overlay_box(args.position, args.size, w / h, tl.canvas.aspect)
+    track = next((t for t in tl.video_tracks if t.role == "overlay" and
+                  not any(c.start < args.end - 1e-6 and c.end > args.start + 1e-6 for c in t.clips)), None)
+    if track is None:
+        track = ops.add_track(tl, "video", name="overlay", role="overlay")
+    clip = ops.place_clip(tl, track.id, args.asset_id, args.source_in, args.source_in + length, args.start,
+                          volume=args.volume, label=args.asset_id,
+                          transform=Transform(x=x, y=y, w=bw, h=bh, fit="contain" if args.position != "full"
+                                              else "cover", opacity=args.opacity))
+    clip.fade_in = clip.fade_out = min(args.fade, length / 2)
+    return f"Overlay {clip.id} ({args.asset_id}) on {track.id} at {format_tc(clip.start)}–{format_tc(clip.end)}, {args.position}."
 
 
 @tool("move_clip", MoveClipIn, mutates=True)
@@ -619,7 +697,7 @@ def zoom(ctx, args: ZoomIn) -> ToolOutput:
             raise EditError("region must lie inside the frame (x+w <= 1, y+h <= 1)")
     region = Rect(**args.region.model_dump()) if args.region else None
     ids = layouts.zoom_range(ctx.session.timeline, track_id, args.start, args.end, region,
-                             source_aspect=_source_aspect(ctx, track_id))
+                             source_aspect=_source_aspect(ctx, track_id), ease=args.ease)
     c = ctx.session.timeline.find_clip(ids[0])[1]
     crop = c.transform.crop
     detail = f" Effective region x{crop.x:.2f} y{crop.y:.2f} w{crop.w:.2f} h{crop.h:.2f}." if crop else ""

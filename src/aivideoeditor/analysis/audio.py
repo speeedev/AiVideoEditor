@@ -14,15 +14,16 @@ def decode_audio(
     sample_rate: int = 16000,
     start: float | None = None,
     duration: float | None = None,
+    stream: int = 0,
 ) -> np.ndarray:
-    """Decode the first audio stream as mono float32 in [-1, 1]."""
+    """Decode one audio stream (default: the first) as mono float32 in [-1, 1]."""
     args: list[str] = []
     if start is not None and start > 0:
         args += ["-ss", f"{start:.6f}"]
     args += ["-i", str(path)]
     if duration is not None:
         args += ["-t", f"{max(duration, 0.0):.6f}"]
-    args += ["-vn", "-map", "0:a:0", "-ac", "1", "-ar", str(sample_rate), "-f", "f32le", "pipe:1"]
+    args += ["-vn", "-map", f"0:a:{stream}", "-ac", "1", "-ar", str(sample_rate), "-f", "f32le", "pipe:1"]
     proc = run_ffmpeg(args, capture_stdout=True)
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 

@@ -105,6 +105,7 @@ Diğer komutlar:
 | `ave transcript show PROJE [--words]` | timeline zamanlı transkript |
 | `ave transcript import PROJE --asset mic --file x.srt` | hazır transkript (JSON/SRT/VTT) içe aktarır |
 | `ave sync PROJE --manual kamera 1.25` | senkronu elle ayarlar |
+| `ave add PROJE kayit.mkv --role mic --audio-stream 1` | çok track'li kayıttan (ör. OBS) belirli ses track'ini kullanır |
 | `ave still PROJE 12.5 -o kare.jpg` | timeline'ın tek karesini render eder |
 | `ave undo PROJE [--steps N]` | son değişiklikleri geri alır |
 | `ave export PROJE --format xml\|otio\|edl\|json` | diğer editörlere aktarır |
@@ -124,11 +125,14 @@ Model ve düşünme derinliği: `--model claude-opus-5-5` (varsayılan) ve `--ef
 | `view_source`, `view_timeline` | ham kayıttan ya da kompozit çıktıdan kareler (görsel) |
 | `ripple_delete` | aralıkları tüm track'lerden keser, boşluğu kapatır, kesimleri sessizliğe oturtur |
 | `apply_layout` | `screen_only`, `camera_only`, `pip`, `side_by_side`, `stack` (dikey video) |
-| `zoom` | ekran kaydında bir bölgeye yakınlaşma |
+| `zoom` | ekran kaydında bir bölgeye yumuşak (animasyonlu) yakınlaşma ve geri açılma |
 | `speed_up` | boş beklemeleri hızlandırma |
 | `add_music` | konuşma altında otomatik kısılan (ducking) müzik |
+| `add_overlay` | logo, slayt, ekran görüntüsü veya b-roll videosu bindirme (konum, boyut, saydamlık, fade) |
+| `set_audio_mastering` | final miksin loudness hedefi (varsayılan -14 LUFS, YouTube standardı) |
 | `add_text`, `set_captions` | başlık ve yazılar, kelime vurgulu altyazı |
-| `place_clip`, `move_clip`, `trim_clip`, `split`, `lift`, `delete_clips`, `set_clip_properties`, `set_track` | klip ve track düzeyinde ince ayar |
+| `place_clip`, `move_clip`, `trim_clip`, `split`, `lift`, `delete_clips`, `set_clip_properties` | klip düzeyinde ince ayar |
+| `set_track` | sessize alma, gizleme, kilitleme, ducking, **gürültü azaltma** ve **ses iyileştirme** |
 | `add_marker` | insan editöre not |
 | `undo`, `render_preview`, `assemble_timeline` | geri alma, ön izleme, baştan kurma |
 
@@ -187,9 +191,8 @@ src/aivideoeditor/
 - Sesi olmayan kayıtlar (örneğin sessiz ekran kaydı) sese göre senkronlanamaz. Bunlar referansla aynı
   anda başlamış kabul edilir; `ave sync --manual` ile düzeltilebilir.
 - Whisper dolgu kelimeleri bazen atlar. Duraklama analizi bunu büyük ölçüde telafi eder.
-- Zoom şu an anlık geçişli (punch-in). Yumuşak, animasyonlu zoom planlanıyor.
-- Planlananlar: klipler arası geçiş efektleri (crossfade), ses temizleme ve seviye normalizasyonu, müzik
-  ritmine kesim, logo ve görsel asset'ler, timeline'da sürükle-bırak düzenleme.
+- Planlananlar: klipler arası geçiş efektleri (crossfade), müzik ritmine kesim, timeline'da
+  sürükle-bırak düzenleme.
 
 ## Geliştirme
 

@@ -84,6 +84,8 @@ class Clip(BaseModel):
     volume: float = 1.0
     fade_in: float = 0.0
     fade_out: float = 0.0
+    zoom_in: float = 0.0      # seconds to animate from the full frame into transform.crop
+    zoom_out: float = 0.0     # seconds to animate from transform.crop back to the full frame
     visible: bool = True
     transform: Transform = Field(default_factory=Transform)
     label: str = ""
@@ -119,6 +121,8 @@ class Track(BaseModel):
     locked: bool = False      # locked tracks are not touched by ripple edits
     duck: bool = False        # audio: lower this track while someone speaks
     volume: float = 1.0
+    denoise: bool = False     # audio: FFT noise reduction (hum, fan, room noise)
+    enhance: bool = False     # audio: voice polish (high-pass + gentle compression)
 
     @property
     def end(self) -> float:
@@ -169,6 +173,14 @@ class Captions(BaseModel):
     font: str = "DejaVu Sans"
 
 
+class AudioMaster(BaseModel):
+    """Processing applied to the final mix."""
+
+    normalize: bool = True
+    target_lufs: float = -14.0   # YouTube / most streaming platforms
+    true_peak: float = -1.0
+
+
 class Marker(BaseModel):
     id: str
     time: float
@@ -181,6 +193,7 @@ class Timeline(BaseModel):
     texts: list[TextOverlay] = Field(default_factory=list)
     captions: Captions = Field(default_factory=Captions)
     markers: list[Marker] = Field(default_factory=list)
+    audio: AudioMaster = Field(default_factory=AudioMaster)
     next_id: int = 1
 
     # -- ids --------------------------------------------------------------

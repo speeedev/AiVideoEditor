@@ -41,7 +41,8 @@ def cmd_init(a: argparse.Namespace) -> None:
 def cmd_add(a: argparse.Namespace) -> None:
     p = _open(a.project)
     for f in a.files:
-        asset = p.add_asset(f, a.role, a.id if len(a.files) == 1 else None, notes=a.notes or "")
+        asset = p.add_asset(f, a.role, a.id if len(a.files) == 1 else None, notes=a.notes or "",
+                            audio_stream=a.audio_stream)
         info = asset.info
         kind = []
         if asset.has_video:
@@ -331,6 +332,8 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["screen", "camera", "mic", "music", "broll", "sfx", "other"])
     p.add_argument("--id", help="asset id (single file only)")
     p.add_argument("--notes", help="free-form notes for the editor about this asset")
+    p.add_argument("--audio-stream", type=int, default=0,
+                   help="use this audio stream of the file (e.g. 1 for the second track of an OBS recording)")
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("brief", help="show or set the project brief")

@@ -119,8 +119,13 @@ def zoom_range(
     region: Rect | None,
     *,
     source_aspect: float,
+    ease: float = 0.0,
 ) -> list[str]:
-    """Punch in on ``region`` of the source in [start, end) (None resets the zoom)."""
+    """Zoom into ``region`` of the source in [start, end) (None resets the zoom).
+
+    ``ease`` > 0 animates smoothly from the full frame into the region at the
+    start of the range and back out at its end; 0 is an instant punch-in.
+    """
     if end <= start + EPS:
         raise EditError("zoom end must be after start")
     track = tl.track(track_id)
@@ -128,18 +133,26 @@ def zoom_range(
         raise EditError("zoom works on video tracks only")
     split_at(tl, start, [track_id])
     split_at(tl, end, [track_id])
-    touched = []
+    touched: list = []
     for c in track.clips:
         if c.start >= start - EPS and c.end <= end + EPS:
+            c.zoom_in = c.zoom_out = 0.0
             if region is None:
                 c.transform.crop = None
             else:
                 box_aspect = (c.transform.w * tl.canvas.width) / (c.transform.h * tl.canvas.height)
                 c.transform.crop = fit_rect_to_aspect(region, box_aspect, source_aspect)
-            touched.append(c.id)
+            touched.append(c)
     if not touched:
         raise EditError(f"no clips on {track_id} between {start:.2f} and {end:.2f}")
-    return touched
+    if region is not None and ease > 0:
+        first, last = touched[0], touched[-1]
+        if first is last:
+            first.zoom_in = first.zoom_out = min(ease, first.duration / 2)
+        else:
+            first.zoom_in = min(ease, first.duration)
+            last.zoom_out = min(ease, last.duration)
+    return [c.id for c in touched]
 
 
 def roles_present(tl: Timeline) -> Sequence[str]:

@@ -10,6 +10,10 @@ from pathlib import Path
 from .ffmpeg import FFmpegError, ffprobe_bin
 
 
+IMAGE_CODECS = {"png", "mjpeg", "webp", "bmp", "tiff", "gif", "jpegls", "jpeg2000"}
+STILL_DURATION = 3600.0  # a still image can be held for up to an hour
+
+
 @dataclass
 class MediaInfo:
     path: str
@@ -24,13 +28,16 @@ class MediaInfo:
     video_codec: str | None = None
     audio_codec: str | None = None
     rotation: int = 0
+    audio_streams: int = 0
+    is_image: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "MediaInfo":
-        return cls(**data)
+        known = cls.__dataclass_fields__.keys()
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 def _parse_rate(rate: str | None) -> float | None:
@@ -67,7 +74,8 @@ def probe(path: str | Path) -> MediaInfo:
          if s.get("codec_type") == "video" and not s.get("disposition", {}).get("attached_pic")),
         None,
     )
-    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    audios = [s for s in streams if s.get("codec_type") == "audio"]
+    audio = audios[0] if audios else None
 
     duration = _float(fmt.get("duration"))
     if duration is None:
@@ -76,7 +84,13 @@ def probe(path: str | Path) -> MediaInfo:
         )
 
     info = MediaInfo(path=path, duration=duration or 0.0,
-                     has_video=video is not None, has_audio=audio is not None)
+                     has_video=video is not None, has_audio=audio is not None, audio_streams=len(audios))
+    if video is not None and audio is None:
+        frames = video.get("nb_frames")
+        still_codec = video.get("codec_name") in IMAGE_CODECS
+        if still_codec and (not duration or duration < 0.05 or frames in ("1", 1)):
+            info.is_image = True
+            info.duration = STILL_DURATION
     if video is not None:
         info.width = video.get("width")
         info.height = video.get("height")

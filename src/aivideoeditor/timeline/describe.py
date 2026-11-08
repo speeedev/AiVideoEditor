@@ -23,7 +23,8 @@ def _fmt_clip(c, track: Track) -> str:
                 f"box x{tr.x:.2f} y{tr.y:.2f} w{tr.w:.2f} h{tr.h:.2f}"
             parts.append(f"{box} {tr.fit}")
             if tr.crop:
-                parts.append(f"zoom x{tr.crop.x:.2f} y{tr.crop.y:.2f} w{tr.crop.w:.2f} h{tr.crop.h:.2f}")
+                ease = f" ease {c.zoom_in:.2f}/{c.zoom_out:.2f}" if (c.zoom_in or c.zoom_out) else ""
+                parts.append(f"zoom x{tr.crop.x:.2f} y{tr.crop.y:.2f} w{tr.crop.w:.2f} h{tr.crop.h:.2f}{ease}")
             if tr.opacity < 1:
                 parts.append(f"opacity {tr.opacity:.2f}")
     if c.fade_in or c.fade_out:
@@ -43,7 +44,8 @@ def describe_timeline(tl: Timeline, *, start: float | None = None, end: float | 
     lines.append("Tracks (video tracks listed bottom layer first):")
     for t in tl.tracks:
         flags = [f for f, on in (("muted", t.muted), ("hidden", t.hidden), ("locked", t.locked),
-                                 ("ducks under voice", t.duck)) if on]
+                                 ("ducks under voice", t.duck), ("denoise", t.denoise),
+                                 ("voice enhance", t.enhance)) if on]
         if t.volume != 1:
             flags.append(f"track vol {t.volume:.2f}")
         lines.append(f"  {t.id} [{t.kind}] {t.name!r} role={t.role or '-'} "
@@ -62,6 +64,8 @@ def describe_timeline(tl: Timeline, *, start: float | None = None, end: float | 
                          f"at ({x.x:.2f},{x.y:.2f}) size {x.size:.3f}")
     cap = tl.captions
     lines.append(f"Captions: {'ON from ' + str(cap.source_asset) if cap.enabled else 'off'}")
+    lines.append("Final mix: " + (f"normalised to {tl.audio.target_lufs:g} LUFS" if tl.audio.normalize
+                                  else "no loudness normalisation"))
     if tl.markers:
         lines.append("Markers:")
         for m in tl.markers:

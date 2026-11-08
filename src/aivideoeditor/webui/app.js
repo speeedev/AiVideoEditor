@@ -11,7 +11,7 @@ let stillTimer = null;
 let refreshTimer = null;
 let userZoomed = false;
 
-const ROLE_TR = { screen: "ekran", camera: "kamera", mic: "mikrofon", music: "müzik", broll: "b-roll", sfx: "efekt", other: "diğer" };
+const ROLE_TR = { screen: "ekran", camera: "kamera", mic: "mikrofon", music: "müzik", broll: "b-roll", sfx: "efekt", other: "diğer", overlay: "bindirme" };
 
 // ------------------------------------------------------------------ helpers --
 async function api(path, body) {
@@ -195,7 +195,8 @@ function renderTimeline() {
     const row = el("div", "track");
     const label = el("div", "label");
     label.innerHTML = `<b>${t.id}</b> ${ROLE_TR[t.role] || t.role || ""}<br>` +
-      [t.muted && "sessiz", t.hidden && "gizli", t.locked && "kilitli", t.duck && "duck"].filter(Boolean).join(" ");
+      [t.muted && "sessiz", t.hidden && "gizli", t.locked && "kilitli", t.duck && "duck",
+       t.denoise && "gürültü↓", t.enhance && "ses+"].filter(Boolean).join(" ");
     const lane = el("div", "lane");
     lane.style.width = `${width}px`;
     for (const c of t.clips) {

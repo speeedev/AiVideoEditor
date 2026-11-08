@@ -27,7 +27,10 @@ single call (they are interpreted against the timeline before that call).
 - Video tracks stack bottom to top. A clip on a video track also plays its own audio at its `volume`; \
 when an external mic is present the camera/screen audio is normally at volume 0 so speech is not doubled.
 - Layouts (screen_only, camera_only, pip, side_by_side, stack) arrange the screen and camera tracks \
-for a time range. `zoom` punches in on part of the source frame. `speed_up` compresses dull stretches.
+for a time range. `zoom` moves smoothly into part of the source frame and back out. `speed_up` \
+compresses dull stretches. Images (logos, slides) and b-roll go on overlay tracks with `add_overlay`.
+- The final mix is loudness-normalised (-14 LUFS by default). `set_track` can denoise or enhance a \
+speech track; consider it when the overview reports a high noise floor (above roughly -50 dBFS).
 - Every edit can be undone with `undo`. A failed tool call changes nothing.
 
 Editing craft

@@ -50,11 +50,13 @@ def _trim_start(c: Clip, new_start: float) -> None:
     c.source_in = c.source_time(new_start)
     c.start = new_start
     c.fade_in = 0.0
+    c.zoom_in = 0.0
 
 
 def _trim_end(c: Clip, new_end: float) -> None:
     c.source_out = c.source_time(new_end)
     c.fade_out = 0.0
+    c.zoom_out = 0.0
 
 
 def _cleanup(track: Track) -> None:
@@ -105,7 +107,7 @@ def add_track(tl: Timeline, kind: str, name: str = "", role: str | None = None,
 
 def set_track(tl: Timeline, track_id: str, **props) -> Track:
     t = tl.track(track_id)
-    allowed = {"name", "role", "muted", "hidden", "locked", "duck", "volume"}
+    allowed = {"name", "role", "muted", "hidden", "locked", "duck", "volume", "denoise", "enhance"}
     for k, v in props.items():
         if v is None:
             continue

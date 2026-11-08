@@ -12,6 +12,7 @@ heavily cut 1-hour recording renders as reliably as a 30-second clip.
 
 from __future__ import annotations
 
+import json
 import math
 import shutil
 import tempfile
@@ -23,7 +24,7 @@ from typing import Protocol
 
 from ..media.ffmpeg import run_ffmpeg
 from ..timeline.mapping import TimelineWord
-from ..timeline.model import Clip, Timeline, Track
+from ..timeline.model import AudioMaster, Clip, Timeline, Track
 from .captions import build_ass
 
 AUDIO_RATE = 48000
@@ -182,7 +183,8 @@ def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: f
                f"trim=duration={seg.duration:.6f}"]
     sw = int(asset.info.get("width") or W)
     sh = int(asset.info.get("height") or H)
-    if tr.crop:
+    animated = _animated_zoom(clip, sw, sh)
+    if tr.crop and not animated:
         cw, ch = _even(sw * tr.crop.w), _even(sh * tr.crop.h)
         cx, cy = int(sw * tr.crop.x), int(sh * tr.crop.y)
         cx, cy = min(cx, max(0, sw - cw)), min(cy, max(0, sh - ch))
@@ -191,17 +193,21 @@ def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: f
     bx, by = int(round(tr.x * W)), int(round(tr.y * H))
     bw, bh = _even(tr.w * W), _even(tr.h * H)
     x, y = bx, by
+
+    def resize(ow: int, oh: int) -> str:
+        return _zoompan(seg, ow, oh, fps) if animated else f"scale={ow}:{oh}"
+
     if tr.fit == "stretch":
-        filters.append(f"scale={bw}:{bh}")
+        filters.append(resize(bw, bh))
     elif tr.fit == "cover":
         scale = max(bw / sw, bh / sh)
         ow, oh = max(bw, _even(sw * scale)), max(bh, _even(sh * scale))
-        filters.append(f"scale={ow}:{oh}")
+        filters.append(resize(ow, oh))
         filters.append(f"crop={bw}:{bh}:{(ow - bw) // 2}:{(oh - bh) // 2}")
     else:  # contain
         scale = min(bw / sw, bh / sh)
         ow, oh = min(bw, _even(sw * scale)), min(bh, _even(sh * scale))
-        filters.append(f"scale={ow}:{oh}")
+        filters.append(resize(ow, oh))
         x, y = bx + (bw - ow) // 2, by + (bh - oh) // 2
     filters.append("setsar=1")
     needs_alpha = tr.opacity < 1 or (seg.starts_clip and clip.fade_in > 0) or (seg.ends_clip and clip.fade_out > 0)
@@ -218,12 +224,49 @@ def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: f
     return ",".join(filters), x, y
 
 
+def _animated_zoom(clip: Clip, sw: int, sh: int) -> bool:
+    """Animated zooms need a crop with the source's aspect ratio (uniform zoom)."""
+    crop = clip.transform.crop
+    if crop is None or (clip.zoom_in <= 0 and clip.zoom_out <= 0):
+        return False
+    src_aspect = sw / sh
+    crop_aspect = (crop.w * sw) / (crop.h * sh)
+    return abs(crop_aspect - src_aspect) / src_aspect < 0.03
+
+
+def _zoompan(seg: Segment, ow: int, oh: int, fps: str) -> str:
+    """zoompan filter easing from the full frame into the clip's crop (and back)."""
+    clip = seg.clip
+    crop = clip.transform.crop
+    assert crop is not None
+    off = seg.t0 - clip.start            # clip-local time of this segment's first frame
+    dur = clip.duration
+    target = 1.0 / max(crop.w, 1e-3)
+    cx, cy = crop.x + crop.w / 2, crop.y + crop.h / 2
+
+    def smooth(var: int, progress: str) -> str:
+        return f"st({var},clip({progress},0,1));st({var},ld({var})*ld({var})*(3-2*ld({var})))"
+
+    parts = [smooth(0, f"(it+{off:.6f})/{clip.zoom_in:.6f}") if clip.zoom_in > 0 else "st(0,1)",
+             smooth(1, f"({dur:.6f}-it-{off:.6f})/{clip.zoom_out:.6f}") if clip.zoom_out > 0 else "st(1,1)",
+             "st(2,min(ld(0),ld(1)))"]
+    amount = ";".join(parts)
+    z = f"{amount};1+ld(2)*{target - 1:.6f}"
+    x = f"{amount};clip((0.5+ld(2)*({cx:.6f}-0.5))*iw-iw/zoom/2,0,iw-iw/zoom)"
+    y = f"{amount};clip((0.5+ld(2)*({cy:.6f}-0.5))*ih-ih/zoom/2,0,ih-ih/zoom)"
+    return f"zoompan=z='{z}':x='{x}':y='{y}':d=1:s={ow}x{oh}:fps={fps}"
+
+
 def _audio_chain(seg: Segment, chunk_t0: float) -> str:
     clip = seg.clip
     filters = ["asetpts=PTS-STARTPTS", f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
     filters += _atempo_chain(clip.speed)
     n = round(seg.duration * AUDIO_RATE)
     filters += [f"apad=whole_len={n}", f"atrim=end_sample={n}"]
+    if seg.track.denoise:
+        filters.append("afftdn=nr=14:nf=-45:tn=1")
+    if seg.track.enhance:
+        filters += ["highpass=f=80", "acompressor=threshold=-20dB:ratio=3:attack=8:release=160:makeup=2"]
     gain = clip.volume * seg.track.volume
     if abs(gain - 1) > 1e-6:
         filters.append(f"volume={gain:.4f}")
@@ -282,7 +325,10 @@ def build_chunk(
         seg.input_index = i
         asset = assets[seg.clip.asset_id]
         pad = 0.25 * seg.clip.speed
-        args += ["-ss", f"{seg.src_in:.6f}", "-t", f"{seg.src_dur + pad:.6f}", "-i", asset.path]
+        if asset.info.get("is_image"):
+            args += ["-loop", "1", "-framerate", fps, "-t", f"{seg.duration + 0.5:.6f}", "-i", asset.path]
+        else:
+            args += ["-ss", f"{seg.src_in:.6f}", "-t", f"{seg.src_dur + pad:.6f}", "-i", asset.path]
 
     graph: list[str] = []
     want_video = video_out is not None or image_out is not None
@@ -329,7 +375,8 @@ def build_chunk(
         n = max(1, round(dur * AUDIO_RATE))
         voice, music = [], []
         for j, seg in enumerate(s for s in chunk.segments if s.audio):
-            graph.append(f"[{seg.input_index}:a:0]{_audio_chain(seg, t0)}[a{j}]")
+            stream = getattr(assets[seg.clip.asset_id], "audio_stream", 0)
+            graph.append(f"[{seg.input_index}:a:{stream}]{_audio_chain(seg, t0)}[a{j}]")
             (music if seg.track.duck else voice).append(f"[a{j}]")
 
         def bus(labels: list[str], name: str) -> str:
@@ -400,13 +447,47 @@ def render_timeline(
         (tmp / "audio.txt").write_text("".join(f"file '{a}'\n" for a in alist), encoding="utf-8")
         run_ffmpeg(["-f", "concat", "-safe", "0", "-i", "video.txt", "-c", "copy", "-y", "video.mp4"], cwd=tmp)
         run_ffmpeg(["-f", "concat", "-safe", "0", "-i", "audio.txt", "-c", "copy", "-y", "audio.wav"], cwd=tmp)
-        run_ffmpeg(["-i", "video.mp4", "-i", "audio.wav", "-map", "0:v:0", "-map", "1:a:0",
-                    "-c:v", "copy", "-c:a", "aac", "-b:a", settings.audio_bitrate,
-                    "-movflags", "+faststart", "-y", str(out_path)], cwd=tmp)
+        audio_filter = loudnorm_filter(tmp / "audio.wav", tl.audio) if tl.audio.normalize else None
+        mux = ["-i", "video.mp4", "-i", "audio.wav", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy"]
+        if audio_filter:
+            mux += ["-af", audio_filter, "-ar", str(AUDIO_RATE)]
+        mux += ["-c:a", "aac", "-b:a", settings.audio_bitrate, "-movflags", "+faststart", "-y", str(out_path)]
+        run_ffmpeg(mux, cwd=tmp)
     finally:
         if not settings.keep_work and not workdir:
             shutil.rmtree(tmp, ignore_errors=True)
     return out_path
+
+
+def measure_loudness(wav: Path, target: AudioMaster) -> dict | None:
+    """First loudnorm pass: measure integrated loudness, true peak and range."""
+    proc = run_ffmpeg(["-i", str(wav), "-af",
+                       f"loudnorm=I={target.target_lufs}:TP={target.true_peak}:LRA=11:print_format=json",
+                       "-f", "null", "-"], loglevel="info")
+    text = proc.stderr.decode("utf-8", "replace")
+    start, end = text.rfind("{"), text.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def loudnorm_filter(wav: Path, target: AudioMaster) -> str | None:
+    """Second-pass loudnorm filter (linear gain) or None for (near) silent mixes."""
+    m = measure_loudness(wav, target)
+    if not m:
+        return None
+    try:
+        measured_i = float(m["input_i"])
+    except (KeyError, ValueError):
+        return None
+    if not math.isfinite(measured_i) or measured_i < -70:
+        return None
+    return (f"loudnorm=I={target.target_lufs}:TP={target.true_peak}:LRA=11:"
+            f"measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}:"
+            f"measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true:print_format=none")
 
 
 def _write_captions(tl: Timeline, words: list[TimelineWord] | None, st: RenderSettings,

@@ -102,6 +102,7 @@ h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing
   white-space: nowrap; color: #fff; border: 1px solid rgba(255,255,255,.15); background: var(--other); }
 .clip.screen { background: var(--screen); } .clip.camera { background: var(--camera); }
 .clip.mic { background: var(--mic); } .clip.music { background: var(--music); } .clip.broll { background: var(--broll); }
+.clip.overlay { background: #b0568f; }
 .clip.hidden-clip { opacity: .35; background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgba(0,0,0,.35) 6px 12px); }
 .clip.muted-clip { filter: saturate(.35); }
 .clip .tag { background: rgba(0,0,0,.35); border-radius: 3px; padding: 0 3px; margin-right: 3px; }
