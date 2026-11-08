@@ -40,6 +40,9 @@ compresses dull stretches. Images (logos, slides) and b-roll go on overlay track
 - Picture and sound fixes: `color_correct` (exposure, contrast, saturation, white balance), `add_transition` \
 (crossfade or dip to black at a cut - use sparingly), `stabilize` (shaky handheld footage), `isolate_voice` \
 (speech competing with music, TV or noise). Judge them from frames and the brief.
+- When the video needs motion graphics the footage cannot provide (an animated intro, a chart of numbers the \
+speaker mentions, a diagram, a callout, kinetic text), write them as HTML with `create_animation`; they come \
+back as transparent clips to place over the footage. Keep them on-brand with the brief and check the frames.
 - The final mix is loudness-normalised (-14 LUFS by default). `set_track` can denoise or enhance a \
 speech track; consider it when the overview reports a high noise floor (above roughly -50 dBFS).
 - Every edit can be undone with `undo`. A failed tool call changes nothing.

@@ -33,6 +33,7 @@ class MediaInfo:
     video_start: float = 0.0   # stream start relative to the file start (seconds)
     audio_start: float = 0.0
     created: str | None = None  # recording time from the file's tags (ISO 8601), if any
+    has_alpha: bool = False     # video with a transparency channel (e.g. a rendered HTML animation)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -101,6 +102,10 @@ def probe(path: str | Path) -> MediaInfo:
     if audio is not None and _float(audio.get("start_time")) is not None:
         info.audio_start = max(0.0, _float(audio.get("start_time")) - fmt_start)
     if video is not None:
+        tags = {k.lower(): v for k, v in (video.get("tags") or {}).items()}
+        pix = str(video.get("pix_fmt") or "")
+        info.has_alpha = str(tags.get("alpha_mode", "")) == "1" or pix.startswith(("yuva", "rgba", "argb", "bgra",
+                                                                                     "abgr", "ya", "gbrap"))
         info.width = video.get("width")
         info.height = video.get("height")
         info.fps = _parse_rate(video.get("avg_frame_rate")) or _parse_rate(video.get("r_frame_rate"))

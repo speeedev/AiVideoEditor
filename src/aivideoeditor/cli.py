@@ -229,6 +229,15 @@ def _make_agent(a: argparse.Namespace, session):
                       max_turns=a.max_turns, display=display, use_fallbacks=not a.no_fallbacks)
 
 
+def cmd_animate(a: argparse.Namespace) -> None:
+    from .pipeline import create_animation
+    p = _open(a.project)
+    html = Path(a.file).read_text(encoding="utf-8")
+    asset, sheet = create_animation(p, a.name or Path(a.file).stem, html, duration=a.duration, fps=a.fps,
+                                    asset_id=a.replace)
+    print(f"Animation {asset.id}: {asset.duration:.2f}s -> {asset.path}\nFrames: {sheet}")
+
+
 def cmd_claude_setup(a: argparse.Namespace) -> None:
     from .claude_setup import write_claude_files
     p = _open(a.project)
@@ -419,7 +428,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("files", nargs="+")
     p.add_argument("--role", default="auto",
-                   choices=["auto", "screen", "camera", "mic", "music", "broll", "sfx", "other"],
+                   choices=["auto", "screen", "camera", "mic", "music", "broll", "sfx", "graphics", "other"],
                    help="auto (default) guesses from the file: video -> camera/screen, audio -> mic, image -> other")
     p.add_argument("--id", help="asset id (single file only)")
     p.add_argument("--notes", help="free-form notes for the editor about this asset")
@@ -514,6 +523,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("--duration", type=float, default=30.0)
     p.set_defaults(func=cmd_demo)
+
+    p = sub.add_parser("animate", help="render an HTML animation (e.g. a Claude artifact) into a transparent clip")
+    p.add_argument("project")
+    p.add_argument("file", help="self-contained .html file")
+    p.add_argument("--duration", type=float, help="seconds (default: <meta name=duration> or 5)")
+    p.add_argument("--fps", type=float)
+    p.add_argument("--name")
+    p.add_argument("--replace", metavar="ASSET", help="re-render an existing animation asset")
+    p.set_defaults(func=cmd_animate)
 
     p = sub.add_parser("claude-setup", help="write .mcp.json and CLAUDE.md so Claude Code can edit this project")
     p.add_argument("project")

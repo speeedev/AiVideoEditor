@@ -152,6 +152,8 @@ def add_asset_to_timeline(project: "Project", tl: Timeline, asset_id: str, start
     start = max(0.0, float(start))
     if a.is_image:
         kind, role, length = "video", "overlay", STILL_LENGTH
+    elif a.role == "graphics":
+        kind, role, length = "video", "overlay", a.duration
     elif a.has_video and a.role not in ("mic", "music", "sfx"):
         kind, role, length = "video", a.role, a.duration
     else:

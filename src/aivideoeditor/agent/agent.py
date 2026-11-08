@@ -122,6 +122,8 @@ class AgentContext:
                 desc.append(f"audio stream #{a.audio_stream}")
             if a.stabilized:
                 desc.append("stabilised")
+            if a.animation:
+                desc.append("HTML animation" + (", transparent" if a.info.get("has_alpha") else ""))
             if a.uses_voice:
                 desc.append("voice isolated" + (f" (music {a.music_level:.0%})" if a.music_level else ""))
             if a.has_video:

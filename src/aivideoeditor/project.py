@@ -27,8 +27,8 @@ from .analysis.visual import VisualAnalysis
 from .media.probe import MediaInfo, probe
 from .timeline.model import Canvas, Timeline
 
-AssetRole = Literal["screen", "camera", "mic", "music", "broll", "sfx", "other"]
-ROLES: tuple[str, ...] = ("screen", "camera", "mic", "music", "broll", "sfx", "other")
+AssetRole = Literal["screen", "camera", "mic", "music", "broll", "sfx", "graphics", "other"]
+ROLES: tuple[str, ...] = ("screen", "camera", "mic", "music", "broll", "sfx", "graphics", "other")
 
 
 class SyncInfo(BaseModel):
@@ -55,6 +55,7 @@ class Asset(BaseModel):
     music_path: str | None = None   # everything except the speech
     audio_mode: Literal["original", "voice"] = "original"
     music_level: float = 0.0        # with audio_mode "voice": how much of the separated music to keep
+    animation: dict | None = None   # HTML animation this clip was rendered from: html, duration, fps, size
 
     @property
     def media(self) -> MediaInfo:

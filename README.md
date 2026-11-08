@@ -191,6 +191,7 @@ varsayılan `claude-opus-5-5`, abonelik modunda Claude Code'un varsayılanı). A
 | `stabilize` | elde çekilmiş, sallanan görüntüyü sabitleme |
 | `isolate_voice` | konuşmayı müzik ve arka plan sesinden ayırma (yerel yapay zekâ modeli) |
 | `get_scenes`, `move_range` | ayrı sahneleri/denemeleri listeleme, sırasını değiştirme |
+| `create_animation` | HTML ile hareketli grafik (animasyonlu başlık, grafik/çizelge, diyagram, logo, sayaç…) yazar; saydam arka planlı klip olarak görüntünün üstüne konur |
 | `place_clip`, `move_clip`, `trim_clip`, `split`, `lift`, `delete_clips`, `set_clip_properties` | klip düzeyinde ince ayar |
 | `set_track` | sessize alma, gizleme, kilitleme, ducking, **gürültü azaltma** ve **ses iyileştirme** |
 | `add_marker` | insan editöre not |
@@ -254,6 +255,19 @@ src/aivideoeditor/
 - **Ajan:** `claude-opus-5-5` ile streaming araç döngüsü kullanılır. Adaptif düşünme, prompt caching ve
   sunucu taraflı fallback açıktır, araç girdileri pydantic ile doğrulanır. Sohbet yalnızca sona ekleme
   yapılarak diske yazılır. Görseller araç sonuçlarının içinde gönderilir.
+
+## Animasyonlar (Claude artifact'leri)
+
+Claude, videoya gereken hareketli grafikleri artifact'lerdeki gibi HTML/CSS/SVG/Canvas olarak yazar
+(`create_animation`). Program sayfayı arka planda Chrome'da kontrollü bir saatle kare kare çeker ve saydam arka
+planlı bir videoya (WebM, alfa kanalı) dönüştürür; klip "grafik" kaydı olarak eklenir ve görüntünün üstüne konur.
+Canlı oynatmada ve final render'da aynı görünür. claude.ai'de hazırladığın bir artifact'i de kullanabilirsin:
+HTML olarak indir, kayıtlara sürükle (süresini sorar) ya da `ave animate PROJE dosya.html --duration 5`.
+
+Sayfa kuralları: sayfa çıktı boyutunda açılır; bindirme için `html/body` arka planını saydam bırak. Animasyon CSS
+`@keyframes`, Web Animations, SVG animasyonu, GSAP ya da `window.renderFrame = (t) => {...}` ile olmalı (saat
+program tarafından ilerletilir, `setTimeout` kullanma). Gereken: `pip install playwright` ve Google Chrome
+(yoksa `playwright install chromium`).
 
 ## Sessiz videolar ve resimler
 

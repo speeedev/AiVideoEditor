@@ -884,6 +884,41 @@ def isolate_voice(ctx, args: IsolateVoiceIn) -> ToolOutput:
     return f"Using the separated voice of {', '.join(ids)}{keep}."
 
 
+class AnimationIn(BaseModel):
+    name: str = Field(description="Short name, e.g. 'intro title' or 'sales chart'")
+    html: str = Field(min_length=20, description="A complete, self-contained HTML page (see the tool description)")
+    duration: float | None = Field(None, gt=0.2, le=120, description="Seconds (default: <meta name=duration> or 5)")
+    asset_id: str | None = Field(None, description="Re-render this existing animation instead of making a new one")
+    start: float | None = Field(None, description="Also put it on the timeline (overlay track) at this time")
+
+
+@tool("create_animation", AnimationIn)
+def create_animation(ctx, args: AnimationIn) -> ToolOutput:
+    """Create a motion-graphics clip from HTML, like a Claude artifact: animated titles, kinetic typography, logo
+    reveals, charts, diagrams, maps, counters, callouts, transitions. The page is rendered frame by frame in
+    headless Chrome at the output size with a controlled clock and becomes a video clip WITH TRANSPARENCY (asset
+    role "graphics") that you place with add_overlay (position "full") or `start`.
+    Page rules: size everything for the canvas resolution shown in the overview (100vw x 100vh); keep html/body
+    background transparent for an overlay, paint one for a full-frame clip; animate with CSS @keyframes, the Web
+    Animations API, SVG animations, GSAP (CDN allowed), or define window.renderFrame = (t) => {...} that draws the
+    state at t seconds (canvas, d3, three.js). Do not rely on wall-clock timers (setTimeout/setInterval) or user
+    input. Text in the user's language. The result includes frames to check; fix and re-render with asset_id."""
+    from ..pipeline import create_animation as run
+    asset, sheet = run(ctx.session.project, args.name, args.html, duration=args.duration, asset_id=args.asset_id,
+                       log=lambda m: None)
+    text = (f"Animation {asset.id}: {asset.duration:.2f}s, {asset.info.get('width')}x{asset.info.get('height')}, "
+            f"transparent background where the page has none.")
+    if args.start is not None:
+        out, err = run_tool(ctx, "add_overlay", {"asset_id": asset.id, "start": args.start,
+                                                 "end": args.start + asset.duration, "position": "full",
+                                                 "fade": 0.0})
+        text += " " + (out if isinstance(out, str) else "")
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    if Path(sheet).exists():
+        blocks.append(image_block(Path(sheet)))
+    return blocks
+
+
 @tool("lift", LiftIn, mutates=True)
 def lift(ctx, args: LiftIn) -> ToolOutput:
     """Clear a time range on specific tracks without closing the gap (e.g. remove b-roll, leave a hole)."""

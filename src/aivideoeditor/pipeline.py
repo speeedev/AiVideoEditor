@@ -238,3 +238,51 @@ def isolate_voice(project: Project, asset_id: str, music_level: float = 0.0, *, 
     asset.audio_mode = "voice"
     asset.music_level = max(0.0, min(1.0, music_level))
     project.save()
+
+
+def create_animation(project: Project, name: str, html: str, *, duration: float | None = None, fps: float | None = None,
+                     width: int | None = None, height: int | None = None, asset_id: str | None = None,
+                     log: Log = print):
+    """Render an HTML animation into a transparent video clip and add it to the project (role "graphics").
+
+    With ``asset_id`` of an existing animation the clip is re-rendered in place, so clips that already use it on
+    the timeline pick up the new version. Returns (asset, contact sheet path).
+    """
+    import re
+    import time
+
+    from .render.animation import html_duration, render_html_animation
+    canvas = project.timeline.canvas
+    if asset_id and asset_id in project.assets:
+        old = project.asset(asset_id).animation or {}
+        duration = duration or old.get("duration")
+        fps = fps or old.get("fps")
+        width, height = width or old.get("width"), height or old.get("height")
+    duration = float(duration or html_duration(html))
+    if not 0.2 <= duration <= 120:
+        raise ValueError("animation duration must be between 0.2 and 120 seconds")
+    fps = float(fps or canvas.fps)
+    width, height = int(width or canvas.width), int(height or canvas.height)
+    slug = re.sub(r"[^\w\-]+", "_", (asset_id or name).strip().lower()).strip("_") or "animation"
+    folder = project.root / "animations" / slug
+    folder.mkdir(parents=True, exist_ok=True)
+    html_file = folder / "index.html"
+    html_file.write_text(html, encoding="utf-8")
+    stamp = time.strftime("%H%M%S")
+    out = folder / f"{slug}-{stamp}.webm"
+    sheet = folder / f"{slug}-{stamp}-sheet.jpg"
+    render_html_animation(html_file, out, duration=duration, fps=fps, width=width, height=height, sheet=sheet, log=log)
+    meta = {"html": str(html_file), "duration": duration, "fps": fps, "width": width, "height": height}
+    if asset_id and asset_id in project.assets:
+        from .media.probe import probe
+        asset = project.asset(asset_id)
+        old_file = Path(asset.path)
+        asset.path, asset.info, asset.animation = str(out), probe(out).to_dict(), meta
+        project.save()
+        if old_file != out and old_file.parent == folder:
+            old_file.unlink(missing_ok=True)
+    else:
+        asset = project.add_asset(out, "graphics", slug, notes=f"HTML animation: {name}")
+        asset.animation = meta
+        project.save()
+    return asset, sheet

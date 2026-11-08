@@ -471,6 +471,15 @@ class App:
         self.bus.publish({"type": "state"})
         return {"clip": clip.id, "result": f"{asset_id} → {format_tc(clip.start)}–{format_tc(clip.end)}"}
 
+    def add_animation(self, html: str, name: str, duration: float | None) -> None:
+        """An HTML animation (e.g. downloaded from a Claude artifact) rendered into a clip, as a job."""
+        from .pipeline import create_animation
+
+        def run():
+            asset, _ = create_animation(self.project, name, html, duration=duration, log=self.log)
+            return {"asset": asset.id}
+        self.start_job("animation", run)
+
     def asset_action(self, asset_id: str, action: str, value=None) -> None:
         """Slow per-recording processing, run as a background job."""
         from .pipeline import isolate_voice, stabilize_asset
@@ -810,6 +819,13 @@ def make_handler(app: App):
             name = re.sub(r"[^\w.\-]+", "_", name) or "upload.bin"
             role = qs.get("role", ["other"])[0]
             n = int(self.headers.get("Content-Length") or 0)
+            if name.lower().endswith((".html", ".htm")):
+                if n > 20_000_000:
+                    raise ValueError("the HTML file is too large")
+                html = self.rfile.read(n).decode("utf-8", "replace")
+                dur = qs.get("duration", [""])[0]
+                app.add_animation(html, Path(name).stem, float(dur) if dur else None)
+                return self._json({"job": "animation"})
             media = app.project.root / "media"
             media.mkdir(exist_ok=True)
             dest = media / name

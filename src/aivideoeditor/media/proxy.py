@@ -57,7 +57,8 @@ def _fresh(asset: "Asset", entry: dict | None) -> bool:
 
 def needs_proxy(asset: "Asset") -> bool:
     h = asset.info.get("height") or 0
-    return asset.has_video and not asset.is_image and h > PROXY_HEIGHT * 1.2
+    return (asset.has_video and not asset.is_image and not asset.info.get("has_alpha")
+            and h > PROXY_HEIGHT * 1.2)
 
 
 def ensure_proxy(project: "Project", asset: "Asset", *, log=print) -> Proxy | None:

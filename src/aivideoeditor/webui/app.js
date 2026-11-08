@@ -12,7 +12,7 @@ let refreshTimer = null;
 let userZoomed = false;
 
 const ASSET_MIME = "application/x-ave-asset";
-const ROLE_TR = { screen: "ekran", camera: "kamera", mic: "mikrofon", music: "müzik", broll: "b-roll", sfx: "efekt", other: "diğer", overlay: "bindirme" };
+const ROLE_TR = { screen: "ekran", camera: "kamera", mic: "mikrofon", music: "müzik", broll: "b-roll", sfx: "efekt", graphics: "grafik", other: "diğer", overlay: "bindirme" };
 
 // ------------------------------------------------------------------ helpers --
 async function api(path, body) {
@@ -181,7 +181,7 @@ function renderAssets() {
       btn.onclick = guard(() => api("/api/asset_action", { asset_id: a.id, action, value }));
       actions.appendChild(btn);
     };
-    if (a.has_video && !a.is_image) {
+    if (a.has_video && !a.is_image && a.role !== "graphics") {
       if (a.stabilized) act("Sabitlemeyi kaldır", "Orijinal görüntüye dön", "unstabilize");
       else act("Titremeyi düzelt", "Elde çekilmiş, sallanan görüntüyü sabitler (uzun videolarda biraz sürer)", "stabilize");
     }
@@ -200,8 +200,15 @@ function guessRole() {
 }
 async function uploadFiles(files) {
   for (const f of files) {
+    let extra = "";
+    if (/\.html?$/i.test(f.name)) {
+      // An HTML animation (e.g. a Claude artifact): rendered into a transparent video clip.
+      const d = prompt(`${f.name}: animasyon kaç saniye sürsün?`, "5");
+      if (d === null) continue;
+      extra = `&duration=${encodeURIComponent(d)}`;
+    }
     status(`${f.name} yükleniyor…`);
-    const res = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&role=${guessRole()}`,
+    const res = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&role=${guessRole()}${extra}`,
       { method: "POST", body: f });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { status(`${f.name}: ${data.error || res.statusText}`, true); continue; }
@@ -768,7 +775,7 @@ function wireColor() {
 function wire() {
   const roleSel = $("uploadRole");
   roleSel.appendChild(Object.assign(el("option", "", "rolü tahmin et"), { value: "auto" }));
-  for (const r of ["screen", "camera", "mic", "music", "broll", "sfx", "other"])
+  for (const r of ["screen", "camera", "mic", "music", "broll", "sfx", "graphics", "other"])
     roleSel.appendChild(Object.assign(el("option", "", ROLE_TR[r]), { value: r }));
 
   $("btnAnalyze").onclick = guard(() => api("/api/analyze", {

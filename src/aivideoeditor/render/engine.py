@@ -442,6 +442,10 @@ def build_chunk(
         if is_image:
             args += ["-loop", "1", "-framerate", fps, "-t", f"{seg.duration + 0.5:.6f}", "-i", path]
         else:
+            info = assets[seg.clip.asset_id].info
+            if info.get("has_alpha") and info.get("video_codec") in ("vp9", "vp8") and path.endswith(".webm"):
+                # FFmpeg's built-in VP8/VP9 decoders drop the alpha channel; libvpx keeps it.
+                args += ["-c:v", "libvpx-vp9" if info["video_codec"] == "vp9" else "libvpx"]
             pad = 0.25 * seg.clip.speed
             ss = seg.src_in - shift
             if ss < 0:
