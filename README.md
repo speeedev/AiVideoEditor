@@ -27,7 +27,7 @@ biçime çevirir:
 | Duraklamalar             | enerji tabanlı konuşma/sessizlik tespiti                       | kesim önerileri, kesimleri sessizliğe oturtma |
 | Ekranda olanlar          | düşük çözünürlüklü kare farkı (aktivite + sahne kesimi)        | "aktif / boş" aralıklar |
 | Görüntü                  | kaynaktan veya kompozit çıktıdan kare                          | zaman damgalı kontak sayfaları (görsel) |
-| Senkron                  | ses zarfı çapraz korelasyonu + GCC-PHAT, saat kayması tespiti  | otomatik, milisaltı hassasiyet |
+| Senkron                  | ses zarfı çapraz korelasyonu + GCC-PHAT, saat kayması tespiti  | otomatik, milisaniye düzeyinde |
 
 Kayıtlar ortak bir saate oturtulup timeline'a alt alta dizilir. Claude bir aralığı kestiğinde bu kesim
 bütün track'lerde aynı anda yapılır (ripple delete), böylece kamera, ekran ve mikrofon hep senkron
@@ -42,7 +42,7 @@ Gereksinimler: **Python 3.10+**, **FFmpeg** (PATH'te `ffmpeg` ve `ffprobe`), Ant
 git clone https://github.com/speeedev/AiVideoEditor.git
 cd AiVideoEditor
 pip install -e ".[transcribe]"
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...          # Windows PowerShell: $env:ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 - FFmpeg kurulumu: macOS'ta `brew install ffmpeg`, Windows'ta `winget install ffmpeg`, Ubuntu'da
@@ -75,7 +75,8 @@ Tarayıcıda açılan editörde:
 1. **Kayıtlar:** dosyaları sürükleyip bırak (ya da yerel yolunu yaz, büyük dosyalar kopyalanmaz) ve her
    birine rol ver: ekran, kamera, mikrofon, müzik.
 2. **Analiz:** dili ve Whisper modelini seç, sonra *Analiz*'e bas.
-3. **Senkron:** kayıtları sese göre hizalar ve timeline'ı kurar (*Timeline kur*).
+3. **Senkron:** kayıtları sese göre hizalar. Ardından *Timeline kur* senkronlu kayıtları timeline'a dizer
+   (timeline boşsa Claude ilk talimatta bunu kendisi yapar).
 4. **Claude paneli:** ne istediğini yaz, örneğin "Hataları ve tekrarları temizle, akıcı bir kurgu yap,
    kelime vurgulu altyazı ekle". Claude'un düşüncelerini, kullandığı araçları ve baktığı kareleri
    canlı izlersin. Timeline da gözünün önünde güncellenir.
@@ -93,7 +94,7 @@ ave init benim-videom --width 1920 --height 1080 --fps 30 --brief "YouTube eğit
 ave add benim-videom ekran.mp4 --role screen
 ave add benim-videom kamera.mp4 --role camera
 ave add benim-videom mikrofon.wav --role mic
-ave analyze benim-videom --language tr --model small
+ave analyze benim-videom --language tr --model medium
 ave sync benim-videom
 ave assemble benim-videom
 ave edit benim-videom "Sessizlikleri ve hataları temizle, okunmayan yerlere zoom yap"
@@ -170,7 +171,7 @@ benim-videom/
   cache/proxies/      düşük çözünürlüklü düzenleme kopyaları
   agent/              Claude sohbeti (conversation.json) ve araç günlüğü (log.jsonl)
   renders/            ön izleme ve final videolar
-  exports/            XML / OTIO / EDL
+  exports/            XML / OTIO / EDL / SRT ve Claude'un kaydettiği metinler (açıklama, bölümler)
   media/              arayüzden yüklenen dosyalar
 ```
 
@@ -185,7 +186,7 @@ src/aivideoeditor/
   agent/        Claude araç tanımları, sistem promptu, streaming araç döngüsü
   pipeline.py   analiz ve senkron adımları
   session.py    undo, render ve kontak sayfası yardımcıları
-  export.py     FCP7 XML, OTIO ve EDL dışa aktarma
+  export.py     FCP7 XML, OTIO, EDL ve SRT dışa aktarma
   web.py        yerel web sunucusu (stdlib) ve webui/ tek sayfa uygulaması
   cli.py        `ave` komut satırı
 ```
@@ -196,7 +197,8 @@ src/aivideoeditor/
   orijinal dosyaları kullanır.
 - **Render:** timeline zaman parçalarına bölünür. Her parça tek bir ffmpeg çalıştırmasıdır: klipler
   doğru noktadan açılır, `overlay` ile birleştirilir ve ses PCM olarak örnek hassasiyetinde karıştırılır.
-  Parçalar kayıpsız birleştirilir. Çok kesimli, 1 saatlik bir kayıt da aynı güvenilirlikte render olur.
+  Parçalar kayıpsız birleştirilir. Böylece aynı anda açık decoder sayısı sınırlı kalır ve çok kesimli uzun
+  kurgular da güvenilir şekilde render olur (test: 10 dakika, 537 klip).
 - **Ajan:** `claude-opus-5-5` ile streaming araç döngüsü kullanılır. Adaptif düşünme, prompt caching ve
   sunucu taraflı fallback açıktır, araç girdileri pydantic ile doğrulanır. Sohbet yalnızca sona ekleme
   yapılarak diske yazılır. Görseller araç sonuçlarının içinde gönderilir.
@@ -216,5 +218,6 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Testler sentetik medya üretir: senkron doğruluğu ve saat kayması, analiz, timeline işlemleri, örnek
-hassasiyetinde parçalı render, sahte istemciyle ajan döngüsü, CLI ve web sunucusu.
+Testler sentetik medya üretir: senkron doğruluğu ve saat kayması, ses-görüntü senkronu, analiz, timeline
+işlemleri, örnek hassasiyetinde parçalı render, zoom/loudness/bindirme, sahte istemciyle ve gerçek SDK ile
+(yerel API taklidine karşı) ajan döngüsü, CLI ve web sunucusu. GitHub Actions her push'ta testleri çalıştırır.
