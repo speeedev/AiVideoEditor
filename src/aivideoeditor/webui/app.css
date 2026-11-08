@@ -168,3 +168,13 @@ h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing
 .msg.md th { background: #262b35; }
 .msg.md hr { border: none; border-top: 1px solid var(--line); margin: 8px 0; }
 .msg.md a { color: var(--accent); }
+.clip.selected { outline: 2px solid #fff; outline-offset: -1px; box-shadow: 0 0 0 2px var(--accent); z-index: 1; }
+.popover { position: fixed; top: 56px; right: 412px; width: 300px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 12px; z-index: 30; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+.popover .row { justify-content: space-between; }
+.popover input[type=range] { width: 150px; flex: none; }
+.popover input[type=number] { width: 64px; flex: none; }
+.popover input[type=color] { width: 48px; height: 26px; padding: 0; flex: none; }
+.popover .presets { flex-wrap: wrap; justify-content: flex-start; }
+a.button { text-decoration: none; color: var(--text); }
+.popover label.row:has(input[type=checkbox]) { justify-content: flex-start; gap: 8px; }

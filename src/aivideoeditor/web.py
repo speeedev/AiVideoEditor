@@ -398,7 +398,8 @@ class App:
         from types import SimpleNamespace
 
         from .agent.tools import run_tool
-        allowed = {"ripple_delete", "apply_layout", "zoom", "speed_up", "add_text", "add_marker", "set_captions"}
+        allowed = {"ripple_delete", "apply_layout", "zoom", "speed_up", "add_text", "add_marker", "set_captions",
+                   "split", "delete_clips", "move_range"}
         if tool not in allowed:
             raise ValueError(f"tool '{tool}' is not available from the UI")
         if self.job:
@@ -427,6 +428,21 @@ class App:
                 raise
         self.bus.publish({"type": "state"})
         return {"clip": clip.id, "result": f"{asset_id} → {format_tc(clip.start)}–{format_tc(clip.end)}"}
+
+    def reveal(self, name: str) -> None:
+        """Show a render in Finder / Explorer (this app runs on the user's own machine)."""
+        import subprocess
+        import sys
+        base = self.project.renders_dir().resolve()
+        path = (base / Path(name).name).resolve()
+        if not path.is_file() or not path.is_relative_to(base):
+            raise FileNotFoundError(name)
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(path)])
+        elif sys.platform.startswith("win"):
+            subprocess.Popen(["explorer", "/select,", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(base)])
 
     def conversation(self) -> list[dict]:
         """Chat history (text only) for the panel."""
@@ -487,7 +503,7 @@ def make_handler(app: App):
                 return {}
             return json.loads(self.rfile.read(n).decode("utf-8"))
 
-        def _file(self, path: Path, content_type: str | None = None) -> None:
+        def _file(self, path: Path, content_type: str | None = None, download_name: str | None = None) -> None:
             if not path.is_file():
                 self._error("not found", 404)
                 return
@@ -515,6 +531,11 @@ def make_handler(app: App):
             self.send_header("Content-Type", ctype)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
+            if download_name:
+                from urllib.parse import quote
+                safe = re.sub(r'[^\w .\-]+', "_", download_name.encode("ascii", "replace").decode())
+                self.send_header("Content-Disposition",
+                                 f"attachment; filename=\"{safe}\"; filename*=UTF-8''{quote(download_name)}")
             if status == 206:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.end_headers()
@@ -565,6 +586,8 @@ def make_handler(app: App):
                     return
                 if path.startswith("/renders/"):
                     p = self._safe_child(app.project.renders_dir(), path[len("/renders/"):])
+                    if p and qs.get("download"):
+                        return self._file(p, download_name=f"{app.project.data.name} - {p.name}")
                     return self._file(p) if p else self._error("not found", 404)
                 if path.startswith("/exports/"):
                     p = self._safe_child(app.project.root / "exports", path[len("/exports/"):])
@@ -680,6 +703,9 @@ def make_handler(app: App):
                 if path == "/api/timeline/add":
                     return self._json(app.drop_asset(body.get("asset_id", ""), float(body.get("start") or 0.0),
                                                      body.get("track_id") or None))
+                if path == "/api/reveal":
+                    app.reveal(body.get("file", ""))
+                    return self._json({"ok": True})
                 if path == "/api/edit":
                     return self._json(app.edit(body.get("tool", ""), body.get("args") or {}))
                 if path == "/api/export":

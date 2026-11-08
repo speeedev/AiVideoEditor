@@ -298,6 +298,10 @@ class SetCaptionsIn(BaseModel):
     uppercase: bool | None = None
     size: float | None = Field(None, gt=0.01, le=0.2)
     y: float | None = Field(None, ge=0.1, le=1.0)
+    color: str | None = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$", description="Text colour, #RRGGBB")
+    highlight_color: str | None = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$",
+                                        description="Colour of the word being spoken, #RRGGBB")
+    outline_color: str | None = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$", description="Outline colour, #RRGGBB")
 
 
 class SetCanvasIn(BaseModel):

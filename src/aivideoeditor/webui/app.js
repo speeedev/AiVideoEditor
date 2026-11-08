@@ -255,6 +255,8 @@ function renderTimeline() {
     for (const c of t.clips) {
       const d = (c.source_out - c.source_in) / c.speed;
       const ce = el("div", `clip ${t.role || "other"}`);
+      ce.dataset.clipId = c.id;
+      if (selectedClips.has(c.id)) ce.classList.add("selected");
       if (t.kind === "video" && !c.visible) ce.classList.add("hidden-clip");
       if ((t.kind === "audio" && c.volume === 0) || t.muted) ce.classList.add("muted-clip");
       ce.style.left = `${c.start * pps}px`;
@@ -310,6 +312,7 @@ function renderTimeline() {
       if (e.button !== 0) return;
       const r = lane.getBoundingClientRect();
       const t0 = (e.clientX - r.left) / pps;
+      const clipEl = e.target.closest ? e.target.closest(".clip") : null;
       let moved = false;
       const move = (ev) => {
         const t1 = (ev.clientX - r.left) / pps;
@@ -321,8 +324,26 @@ function renderTimeline() {
       const up = (ev) => {
         document.removeEventListener("mousemove", move);
         document.removeEventListener("mouseup", up);
-        if (!moved) setPlayhead(t0);
-        else setPlayhead((ev.clientX - r.left) / pps);
+        if (!moved) {
+          if (clipEl) {
+            const id = clipEl.dataset.clipId;
+            if (ev.shiftKey || ev.metaKey) {
+              if (selectedClips.has(id)) selectedClips.delete(id); else selectedClips.add(id);
+            } else {
+              selectedClips = new Set([id]);
+            }
+            selection = null;
+          } else {
+            selectedClips = new Set();
+          }
+          drawClipSelection();
+          drawSelection();
+          setPlayhead(t0);
+        } else {
+          selectedClips = new Set();
+          drawClipSelection();
+          setPlayhead((ev.clientX - r.left) / pps);
+        }
       };
       document.addEventListener("mousemove", move);
       document.addEventListener("mouseup", up);
@@ -330,10 +351,37 @@ function renderTimeline() {
     };
   });
   drawSelection();
+  drawClipSelection();
+  if (!$("capPanel").classList.contains("hidden")) fillCaptions();
   $("tlInfo").textContent = `${tl.tracks.length} track · ${tl.tracks.reduce((n, t) => n + t.clips.length, 0)} klip · ` +
     `${tc(S.duration)} · ${tl.canvas.width}×${tl.canvas.height} ${tl.canvas.fps} fps`;
   setPlayhead(Math.min(playhead, S.duration), true);
 }
+let selectedClips = new Set();
+function findClip(id) {
+  for (const t of S.timeline.tracks) for (const c of t.clips) if (c.id === id) return [t, c];
+  return null;
+}
+function drawClipSelection() {
+  if (!S || !S.project) return;
+  // Forget clips that no longer exist (after edits, undo or Claude's changes).
+  selectedClips = new Set([...selectedClips].filter((id) => findClip(id)));
+  document.querySelectorAll(".clip").forEach((e) => e.classList.toggle("selected", selectedClips.has(e.dataset.clipId)));
+  $("clipBox").classList.toggle("hidden", !selectedClips.size);
+  if (!selectedClips.size) return;
+  const parts = [...selectedClips].map((id) => {
+    const [t, c] = findClip(id);
+    return `${ROLE_TR[t.role] || t.role || t.id} ${tc(c.start)}`;
+  });
+  $("clipText").textContent = selectedClips.size === 1 ? `Seçili klip: ${parts[0]}` : `${selectedClips.size} klip seçili`;
+}
+const deleteClips = guard(async (ripple) => {
+  if (!selectedClips.size) return;
+  const r = await api("/api/edit", { tool: "delete_clips", args: { clip_ids: [...selectedClips], ripple } });
+  status(r.result);
+  selectedClips = new Set();
+  drawClipSelection();
+});
 let selection = null;  // [start, end] in timeline seconds
 function setSelection(a, b) {
   a = Math.max(0, a);
@@ -425,7 +473,14 @@ function showTab(which) {
     const file = $("renderSelect").value || S.renders[0];
     const src = `/renders/${encodeURIComponent(file)}`;
     if (!$("video").src.endsWith(src)) $("video").src = src;
-  } else requestStill();
+    $("dlLink").href = `${src}?download=1`;
+    $("dlLink").classList.remove("hidden");
+    $("btnReveal").classList.remove("hidden");
+  } else {
+    $("dlLink").classList.add("hidden");
+    $("btnReveal").classList.add("hidden");
+    requestStill();
+  }
 }
 
 // --------------------------------------------------------------------- chat --
@@ -542,6 +597,7 @@ function handleEvent(ev) {
           refresh().then(() => {
             if (play) playFrom(ev.result.file);
             else { $("renderSelect").value = ev.result.file; showTab("video"); }
+            if (ev.result.file.startsWith("final-")) status(`Final video hazır: ${ev.result.file} — “⬇ İndir” ile kaydet`);
           });
         }
       }
@@ -622,6 +678,62 @@ const send = guard(async () => {
   $("newConv").checked = false;
 });
 
+// ----------------------------------------------------------------- captions --
+const CAPTION_PRESETS = {
+  klasik: { highlight_words: false, uppercase: false, size: 0.055, y: 0.9, color: "#FFFFFF", outline_color: "#000000", max_words: 7 },
+  vurgulu: { highlight_words: true, uppercase: false, size: 0.06, y: 0.88, color: "#FFFFFF", highlight_color: "#FFD400", outline_color: "#000000", max_words: 6 },
+  shorts: { highlight_words: true, uppercase: true, size: 0.075, y: 0.72, color: "#FFFFFF", highlight_color: "#39FF6A", outline_color: "#000000", max_words: 3 },
+  minimal: { highlight_words: false, uppercase: false, size: 0.042, y: 0.94, color: "#F2F2F2", outline_color: "#202020", max_words: 9 },
+};
+function fillCaptions() {
+  const c = S.timeline.captions;
+  $("capEnabled").checked = c.enabled;
+  $("capSize").value = c.size * 100;
+  $("capY").value = c.y * 100;
+  $("capWords").value = c.max_words;
+  $("capColor").value = c.color;
+  $("capHi").value = c.highlight_color;
+  $("capOutline").value = c.outline_color;
+  $("capHighlight").checked = c.highlight_words;
+  $("capUpper").checked = c.uppercase;
+}
+const saveCaptions = guard(async (extra) => {
+  const args = {
+    enabled: $("capEnabled").checked,
+    size: +$("capSize").value / 100,
+    y: +$("capY").value / 100,
+    max_words: Math.max(1, Math.min(12, +$("capWords").value || 6)),
+    color: $("capColor").value.toUpperCase(),
+    highlight_color: $("capHi").value.toUpperCase(),
+    outline_color: $("capOutline").value.toUpperCase(),
+    highlight_words: $("capHighlight").checked,
+    uppercase: $("capUpper").checked,
+    ...(extra || {}),
+  };
+  try {
+    const r = await api("/api/edit", { tool: "set_captions", args });
+    status(r.result);
+  } catch (e) {
+    fillCaptions();
+    throw new Error(/transcript/.test(e.message) ? "Altyazı için önce Analiz ile transkript çıkar" : e.message);
+  }
+});
+function wireCaptions() {
+  $("btnCaptions").onclick = () => {
+    if (!S || !S.project) return;
+    const p = $("capPanel");
+    if (p.classList.contains("hidden")) fillCaptions();
+    p.classList.toggle("hidden");
+  };
+  $("capClose").onclick = () => $("capPanel").classList.add("hidden");
+  for (const id of ["capEnabled", "capSize", "capY", "capWords", "capColor", "capHi", "capOutline", "capHighlight", "capUpper"]) {
+    $(id).addEventListener("change", () => saveCaptions());
+  }
+  for (const b of document.querySelectorAll("#capPanel [data-preset]")) {
+    b.onclick = async () => { await saveCaptions({ ...CAPTION_PRESETS[b.dataset.preset], enabled: true }); fillCaptions(); };
+  }
+}
+
 // ------------------------------------------------------------------- wiring --
 function wire() {
   const roleSel = $("uploadRole");
@@ -666,6 +778,15 @@ function wire() {
   $("tlFit").onclick = () => { userZoomed = false; renderTimeline(); };
   $("send").onclick = send;
   $("btnPlay").onclick = togglePlay;
+  $("btnReveal").onclick = guard(() => api("/api/reveal", { file: $("renderSelect").value || S.renders[0] }));
+  $("clipDelete").onclick = () => deleteClips(false);
+  $("clipRipple").onclick = () => deleteClips(true);
+  $("clipClear").onclick = () => { selectedClips = new Set(); drawClipSelection(); };
+  $("tlSplit").onclick = guard(async () => {
+    const r = await api("/api/edit", { tool: "split", args: { time: playhead } });
+    status(r.result);
+  });
+  wireCaptions();
   ["play", "pause", "ended"].forEach((n) => $("video").addEventListener(n, updatePlayButton));
   // Drag a recording from the list onto the timeline.
   const tlArea = $("tlScroll");
@@ -754,8 +875,10 @@ function wire() {
     if (["TEXTAREA", "INPUT", "SELECT"].includes(document.activeElement.tagName)) return;
     const fps = S ? S.timeline.canvas.fps : 30;
     if (e.key === " " && S && S.project) { togglePlay(); }
+    else if ((e.key === "Delete" || e.key === "Backspace") && selectedClips.size) { deleteClips(e.shiftKey); }
     else if ((e.key === "Delete" || e.key === "Backspace") && selection) { $("selCut").click(); }
-    else if (e.key === "Escape") { selection = null; drawSelection(); }
+    else if (e.key.toLowerCase() === "s" && !e.metaKey && !e.ctrlKey && S && S.project) { $("tlSplit").click(); }
+    else if (e.key === "Escape") { selection = null; selectedClips = new Set(); drawSelection(); drawClipSelection(); }
     else if (e.key === "ArrowRight") setPlayhead(playhead + (e.shiftKey ? 1 : 1 / fps));
     else if (e.key === "ArrowLeft") setPlayhead(playhead - (e.shiftKey ? 1 : 1 / fps));
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {

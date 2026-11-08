@@ -97,3 +97,37 @@ def test_play_uses_current_render(server):
     # Any edit makes the preview stale, so Play renders again.
     post(base + "/api/edit", {"tool": "ripple_delete", "args": {"ranges": [{"start": 0, "end": 1}], "snap_to_pauses": False}})
     assert json.loads(get(base + "/api/state")[2])["current_render"] is None
+
+
+def test_download_captions_and_clip_delete(server):
+    import time as _time
+    import urllib.request as _ur
+    base, app = server
+    # Caption style from the panel (colours included).
+    status, data = post(base + "/api/edit", {"tool": "set_captions", "args": {
+        "enabled": True, "size": 0.07, "y": 0.8, "max_words": 3, "color": "#FFEE00",
+        "highlight_color": "#00FF00", "outline_color": "#112233", "highlight_words": True, "uppercase": True}})
+    assert status == 200, data
+    cap = app.project.timeline.captions
+    assert (cap.color, cap.highlight_color, cap.outline_color, cap.max_words, cap.uppercase) == \
+        ("#FFEE00", "#00FF00", "#112233", 3, True)
+    assert post(base + "/api/edit", {"tool": "set_captions", "args": {"enabled": True, "color": "yellow"}})[0] == 400
+    # Select a clip and delete it (leaving a gap), then ripple-delete another.
+    tl = app.project.timeline
+    cam = next(t for t in tl.video_tracks if t.role == "camera").clips[0]
+    before = tl.duration
+    assert post(base + "/api/edit", {"tool": "delete_clips", "args": {"clip_ids": [cam.id], "ripple": False}})[0] == 200
+    assert not any(c.id == cam.id for _, c in app.project.timeline.all_clips())
+    assert app.project.timeline.duration == pytest.approx(before)
+    assert post(base + "/api/edit", {"tool": "split", "args": {"time": 2.0}})[0] == 200
+    # Final render can be downloaded with a proper file name.
+    assert post(base + "/api/render", {"preview": False})[0] == 200
+    for _ in range(400):
+        if app.job is None:
+            break
+        _time.sleep(0.25)
+    name = json.loads(get(base + "/api/state")[2])["renders"][0]
+    with _ur.urlopen(base + f"/renders/{name}?download=1", timeout=30) as r:
+        assert r.status == 200 and "attachment" in r.headers["Content-Disposition"]
+        assert r.read(8)
+    assert post(base + "/api/reveal", {"file": "../project.json"})[0] == 400

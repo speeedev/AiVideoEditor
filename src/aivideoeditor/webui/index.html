@@ -22,6 +22,7 @@
     <span class="sep"></span>
     <button id="btnPreview" class="primary" title="Düşük çözünürlüklü hızlı render">Ön izleme render</button>
     <button id="btnFinal" title="Tam kalite render">Final render</button>
+    <button id="btnCaptions" title="Altyazıyı aç/kapat ve stilini değiştir">CC Altyazı</button>
     <select id="exportFormat" title="Diğer editörlere aktar">
       <option value="">Dışa aktar…</option>
       <option value="xml">Premiere / Resolve (FCP7 XML)</option>
@@ -74,6 +75,8 @@
         <button id="tabFrame" class="tab active">Kare</button>
         <button id="tabVideo" class="tab">Ön izleme videosu</button>
         <select id="renderSelect" class="hidden"></select>
+        <a id="dlLink" class="button small primary hidden" title="Bu videoyu İndirilenler klasörüne kaydet">⬇ İndir</a>
+        <button id="btnReveal" class="small hidden" title="Dosyayı Finder'da göster">📁 Klasörde göster</button>
         <span class="grow"></span>
         <span id="timecode" class="mono">00:00.00 / 00:00.00</span>
       </div>
@@ -85,9 +88,16 @@
     </div>
     <div class="timeline">
       <div class="tl-toolbar">
+        <button id="tlSplit" class="small" title="Bütün track'leri imlecin olduğu yerden böl (S)">✂ Böl</button>
         <button id="tlFit" class="small">Sığdır</button>
         <label class="small muted">Yakınlaştır</label>
         <input id="tlZoom" type="range" min="2" max="400" value="40">
+        <span id="clipBox" class="sel-tools hidden">
+          <span id="clipText" class="small"></span>
+          <button id="clipDelete" class="small" title="Sadece bu klibi kaldır, yeri boş kalsın (Delete)">Sil</button>
+          <button id="clipRipple" class="small" title="Bu zaman aralığını bütün track'lerden kes, video kısalsın (Shift+Delete)">Sil ve boşluğu kapat</button>
+          <button id="clipClear" class="small">Seçimi kaldır</button>
+        </span>
         <span id="selBox" class="sel-tools hidden">
           <span id="selText" class="small"></span>
           <button id="selCut" class="small" title="Seçili aralığı tüm track'lerden kes">✂ Kes</button>
@@ -176,6 +186,25 @@
       </section>
     </div>
   </div>
+</div>
+<div id="capPanel" class="popover hidden">
+  <div class="row"><b>Altyazı</b><span class="grow"></span><button id="capClose" class="small">✕</button></div>
+  <label class="row"><input id="capEnabled" type="checkbox"> Altyazı açık</label>
+  <div class="row presets">
+    <button class="small" data-preset="klasik">Klasik</button>
+    <button class="small" data-preset="vurgulu">Vurgulu</button>
+    <button class="small" data-preset="shorts">Shorts</button>
+    <button class="small" data-preset="minimal">Minimal</button>
+  </div>
+  <label class="row">Boyut <input id="capSize" type="range" min="3" max="10" step="0.5"></label>
+  <label class="row">Konum <input id="capY" type="range" min="50" max="98" step="1" title="Ekranın ne kadar altında"></label>
+  <label class="row">Satırdaki kelime <input id="capWords" type="number" min="1" max="12"></label>
+  <label class="row">Yazı rengi <input id="capColor" type="color"></label>
+  <label class="row">Vurgu rengi <input id="capHi" type="color"></label>
+  <label class="row">Kenar rengi <input id="capOutline" type="color"></label>
+  <label class="row"><input id="capHighlight" type="checkbox"> Konuşulan kelimeyi vurgula</label>
+  <label class="row"><input id="capUpper" type="checkbox"> BÜYÜK HARF</label>
+  <p class="small muted">Değişiklikler ön izleme karesinde hemen görünür.</p>
 </div>
 <div id="lightbox" class="lightbox hidden"><img alt=""></div>
 <script src="/static/app.js"></script>
