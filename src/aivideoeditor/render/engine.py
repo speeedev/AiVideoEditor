@@ -20,12 +20,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ..media.ffmpeg import run_ffmpeg
 from ..timeline.mapping import TimelineWord
 from ..timeline.model import AudioMaster, Clip, Timeline, Track
 from .captions import build_ass
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .textlayer import TextLayer
 
 AUDIO_RATE = 48000
 
@@ -371,6 +374,7 @@ def build_chunk(
     audio_out: str | None,
     image_out: str | None = None,
     captions_file: str | None = None,
+    text_layer: "TextLayer | None" = None,
 ) -> list[str]:
     """ffmpeg arguments (without the binary) for one chunk.
 
@@ -418,6 +422,14 @@ def build_chunk(
             else:
                 seg.audio_input = add_input(seg, asset.path, is_image)
 
+    layer_input = None
+    if text_layer is not None and want_video:
+        name = text_layer.concat_list(t0, t0 + dur, f"textlayer_{chunk.f0}_{chunk.f1}.txt")
+        if name:
+            args += ["-f", "concat", "-safe", "0", "-i", name]
+            layer_input = n_inputs
+            n_inputs += 1
+
     graph: list[str] = []
 
     if want_video:
@@ -433,13 +445,18 @@ def build_chunk(
                 graph.append(f"[{cur}][v{k}]overlay=x={x}:y={y}:eof_action=pass:format=auto[o{k}]")
                 cur = f"o{k}"
                 k += 1
+        if layer_input is not None:
+            # Titles/captions drawn by Pillow: one image per text state, timed by the concat list.
+            graph.append(f"[{layer_input}:v:0]format=rgba,setpts=PTS-STARTPTS[txt]")
+            graph.append(f"[{cur}][txt]overlay=0:0:format=auto[otxt]")
+            cur = "otxt"
         post = [f"setpts=PTS+{t0:.6f}/TB"]
         font = _font_file()
-        if font is not None and tl.texts:
+        if text_layer is None and font is not None and tl.texts:
             local_font = workdir / ("font" + font.suffix)
             if not local_font.exists():
                 shutil.copyfile(font, local_font)
-        for x in tl.texts:
+        for x in ([] if text_layer is not None else tl.texts):
             if x.end <= t0 or x.start >= t0 + dur:
                 continue
             (workdir / f"text_{x.id}.txt").write_text(x.text, encoding="utf-8")
@@ -515,7 +532,8 @@ def render_timeline(
     tmp = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="ave_render_"))
     tmp.mkdir(parents=True, exist_ok=True)
     try:
-        captions_file = _write_captions(tl, caption_words, settings, tmp)
+        layer = _text_layer(tl, caption_words, settings, tmp)
+        captions_file = None if layer else _write_captions(tl, caption_words, settings, tmp)
         chunks = plan_chunks(tl, assets, settings.fps, settings.max_inputs)
         vlist, alist = [], []
         for i, chunk in enumerate(chunks):
@@ -523,7 +541,7 @@ def render_timeline(
                 progress(i, len(chunks))
             v, a = f"chunk_{i:04d}.mp4", f"chunk_{i:04d}.wav"
             args = build_chunk(tl, assets, chunk, settings, tmp, video_out=v, audio_out=a,
-                               captions_file=captions_file)
+                               captions_file=captions_file, text_layer=layer)
             run_ffmpeg(args, cwd=tmp)
             vlist.append(v)
             alist.append(a)
@@ -576,6 +594,18 @@ def loudnorm_filter(wav: Path, target: AudioMaster) -> str | None:
             f"measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true:print_format=none")
 
 
+def _text_layer(tl: Timeline, words: list[TimelineWord] | None, st: RenderSettings,
+                workdir: Path) -> "TextLayer | None":
+    """A Pillow text layer when this FFmpeg cannot draw text itself (and there is text to draw)."""
+    if not (tl.texts or (tl.captions.enabled and words)):
+        return None
+    from .textlayer import TextLayer, use_pillow_text
+    if not use_pillow_text():
+        return None
+    layer = TextLayer(tl, words, st.width, st.height, workdir)
+    return layer if layer.visible else None
+
+
 def _write_captions(tl: Timeline, words: list[TimelineWord] | None, st: RenderSettings,
                     workdir: Path) -> str | None:
     if not (tl.captions.enabled and words):
@@ -600,10 +630,11 @@ def render_still(
     f = min(max(0, int(math.floor(t * settings.fps + 1e-6))), total - 1)
     with tempfile.TemporaryDirectory(prefix="ave_still_") as tmp:
         tmpd = Path(tmp)
-        captions_file = _write_captions(tl, caption_words, settings, tmpd)
+        layer = _text_layer(tl, caption_words, settings, tmpd)
+        captions_file = None if layer else _write_captions(tl, caption_words, settings, tmpd)
         chunk = ChunkPlan(f, f + 1, collect_segments(tl, assets, f, f + 1, settings.fps, with_audio=False))
         args = build_chunk(tl, assets, chunk, settings, tmpd, video_out=None, audio_out=None,
-                           image_out=str(out_path), captions_file=captions_file)
+                           image_out=str(out_path), captions_file=captions_file, text_layer=layer)
         run_ffmpeg(args, cwd=tmpd)
     return out_path
 

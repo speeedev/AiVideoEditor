@@ -40,6 +40,31 @@ def group_words(words: list[TimelineWord], cfg: Captions, *, pause: float = 0.5)
     return lines
 
 
+@dataclass(frozen=True)
+class CaptionEvent:
+    """One on-screen state of the captions: a line of words, optionally with one highlighted."""
+
+    start: float
+    end: float
+    texts: tuple[str, ...]
+    highlight: int | None = None
+
+
+def caption_events(words: list[TimelineWord], cfg: Captions) -> list[CaptionEvent]:
+    events: list[CaptionEvent] = []
+    for line in group_words(words, cfg):
+        texts = tuple((w.text.upper() if cfg.uppercase else w.text) for w in line.words)
+        if not cfg.highlight_words:
+            events.append(CaptionEvent(line.start, line.end, texts))
+            continue
+        for i, w in enumerate(line.words):
+            a = w.start if i else line.start
+            b = line.words[i + 1].start if i + 1 < len(line.words) else line.end
+            if b - a >= 0.02:
+                events.append(CaptionEvent(a, b, texts, i))
+    return events
+
+
 def ass_color(color: str, alpha: int = 0) -> str:
     """'#RRGGBB' -> '&HAABBGGRR' (ASS colour)."""
     c = color.lstrip("#")
@@ -80,17 +105,8 @@ def build_ass(words: list[TimelineWord], cfg: Captions, width: int, height: int)
     )
     events: list[str] = []
     hi = ass_color(cfg.highlight_color)
-    for line in group_words(words, cfg):
-        texts = [(w.text.upper() if cfg.uppercase else w.text) for w in line.words]
-        if not cfg.highlight_words:
-            events.append(f"Dialogue: 0,{_ts(line.start)},{_ts(line.end)},Default,,0,0,0,,"
-                          f"{_escape(' '.join(texts))}")
-            continue
-        for i, w in enumerate(line.words):
-            a = w.start if i else line.start
-            b = line.words[i + 1].start if i + 1 < len(line.words) else line.end
-            if b - a < 0.02:
-                continue
-            parts = [(f"{{\\c{hi}}}{_escape(t)}{{\\r}}" if j == i else _escape(t)) for j, t in enumerate(texts)]
-            events.append(f"Dialogue: 0,{_ts(a)},{_ts(b)},Default,,0,0,0,,{' '.join(parts)}")
+    for ev in caption_events(words, cfg):
+        parts = [(f"{{\\c{hi}}}{_escape(t)}{{\\r}}" if j == ev.highlight else _escape(t))
+                 for j, t in enumerate(ev.texts)]
+        events.append(f"Dialogue: 0,{_ts(ev.start)},{_ts(ev.end)},Default,,0,0,0,,{' '.join(parts)}")
     return header + "\n".join(events) + "\n"

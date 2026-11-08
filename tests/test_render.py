@@ -101,3 +101,31 @@ def test_ass_generation():
     assert ass.count("Dialogue:") == 10      # one event per highlighted word
     assert ass_color("#FFD400") in ass
     assert ass_color("#102030") == "&H00302010"
+
+
+def test_pillow_text_layer_when_ffmpeg_cannot_draw_text(session, tmp_path, monkeypatch):
+    """Homebrew's slim ffmpeg has no drawtext/libass: titles and captions are drawn with Pillow."""
+    from PIL import Image
+    from aivideoeditor.render.textlayer import TextLayer, ffmpeg_can_draw_text
+    assert isinstance(ffmpeg_can_draw_text(), bool)
+    tl = session.timeline
+    ops.add_text(tl, 0.5, 3.0, "BAŞLIK", y=0.15, size=0.12, color="#FF0000", box=False)
+    ops.set_captions(tl, enabled=True, source_asset="mic", highlight_words=True)
+    session.commit()
+    layer = TextLayer(tl, session.caption_words(), 320, 180, tmp_path)
+    assert layer.visible and layer.spans[0][0] == 0.0
+    assert abs(layer.spans[-1][1] - tl.duration) < 1e-6
+    assert all(a < b for a, b, _ in layer.spans)
+
+    monkeypatch.setenv("AVE_TEXT_RENDERER", "pillow")
+    st = RenderSettings.for_timeline(tl, preview=True, preview_width=320)
+    st.max_inputs = 3
+    out = render_timeline(tl, session.project.assets, tmp_path / "t.mp4", st,
+                          caption_words=session.caption_words(), workdir=tmp_path / "w")
+    assert int(_probe(out)["video"]["nb_read_frames"]) == round(tl.duration * 30)
+    assert list((tmp_path / "w").glob("txt_*.png"))            # the fallback was used
+    still = Image.open(session.still(1.0, width=320)).convert("RGB")
+    w, h = still.size
+    reds = sum(1 for x in range(w) for y in range(int(h * 0.05), int(h * 0.25))
+               if (lambda p: p[0] > 180 and p[1] < 90 and p[2] < 90)(still.getpixel((x, y))))
+    assert reds > 50                                            # the red title is on the frame
