@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import textwrap
 from pathlib import Path
@@ -85,6 +86,66 @@ def cmd_assemble(a: argparse.Namespace) -> None:
     s = EditorSession(_open(a.project))
     s.assemble(layout=a.layout)
     print(describe_timeline(s.timeline))
+
+
+def project_status(p) -> tuple[list[str], str | None]:
+    """Human-readable checklist of a project's state and the suggested next command."""
+    from .timeline.assemble import primary_audio_asset
+    lines: list[str] = []
+    nxt: str | None = None
+    root = str(p.root)
+    if not p.assets:
+        return ["No recordings yet."], f"ave add {root} <file> --role screen|camera|mic|music"
+    lines.append("Recordings:")
+    need_analysis = False
+    for asset in p.assets.values():
+        marks = []
+        if asset.has_audio and asset.role in ("mic", "camera", "screen"):
+            marks.append("pauses ✓" if p.speech(asset.id) else "pauses ✗")
+        if asset.has_video and asset.role in ("screen", "camera", "broll") and not asset.is_image:
+            marks.append("visual ✓" if p.visual(asset.id) else "visual ✗")
+        if asset.has_audio and asset.role in ("mic", "camera", "screen"):
+            marks.append("transcript ✓" if p.transcript(asset.id) else "transcript –")
+        if any("✗" in m for m in marks):
+            need_analysis = True
+        sync = ""
+        if asset.sync:
+            sync = "sync ref" if asset.sync.method == "reference" else f"sync {asset.sync.offset:+.3f}s ({asset.sync.method})"
+        lines.append(f"  {asset.id:<16} {asset.role:<7} {format_tc(asset.duration):>9}  {'  '.join(marks)}  {sync}")
+    primary = primary_audio_asset(p)
+    if primary and not p.transcript(primary):
+        lines.append(f"  ! no transcript for the primary speech recording '{primary}' (Claude edits much better with one)")
+    synced = all(a.sync for a in p.assets.values() if a.role in ("screen", "camera", "mic"))
+    tl = p.timeline
+    lines.append(f"Timeline: {len(tl.tracks)} tracks, {sum(len(t.clips) for t in tl.tracks)} clips, "
+                 f"{format_tc(tl.duration)}")
+    conv = p.root / "agent" / "conversation.json"
+    if conv.exists():
+        n = sum(1 for m in json.loads(conv.read_text(encoding="utf-8")) if m.get("role") == "assistant")
+        lines.append(f"Claude conversation: {n} assistant turns")
+    renders = sorted(p.renders_dir().glob("*.mp4"))
+    if renders:
+        lines.append(f"Latest render: {renders[-1].name}")
+    if need_analysis or (primary and not p.transcript(primary)):
+        nxt = f"ave analyze {root} --language tr"
+    elif not synced:
+        nxt = f"ave sync {root}"
+    elif not tl.tracks:
+        nxt = f"ave assemble {root}"
+    elif not conv.exists():
+        nxt = f"ave edit {root} \"<what you want>\"   (or: ave ui {root})"
+    else:
+        nxt = f"ave render {root} --preview"
+    return lines, nxt
+
+
+def cmd_status(a: argparse.Namespace) -> None:
+    p = _open(a.project)
+    lines, nxt = project_status(p)
+    print(_c(BOLD, f"{p.data.name}") + (f" — {p.data.brief}" if p.data.brief else ""))
+    print("\n".join(lines))
+    if nxt:
+        print(_c(GREEN, f"\nNext: {nxt}"))
 
 
 def cmd_show(a: argparse.Namespace) -> None:
@@ -171,7 +232,7 @@ def cmd_edit(a: argparse.Namespace) -> None:
     result = agent.run(instruction, new_conversation=a.new)
     print()
     print(_c(BOLD, result.text))
-    print(_c(DIM, f"\n[{result.stop_reason}] {result.turns} turns · {result.usage.summary()}"))
+    print(_c(DIM, f"\n[{result.stop_reason}] {result.turns} turns · {result.usage.summary(result.model)}"))
     print(_c(DIM, f"Timeline duration: {format_tc(session.timeline.duration)}"))
     if a.render:
         _render(session, preview=True)
@@ -207,7 +268,7 @@ def cmd_chat(a: argparse.Namespace) -> None:
         result = agent.run(line, new_conversation=a.new and first)
         first = False
         print("\n" + _c(BOLD, result.text))
-        print(_c(DIM, f"[{result.usage.summary()}] duration {format_tc(session.timeline.duration)}"))
+        print(_c(DIM, f"[{result.usage.summary(result.model)}] duration {format_tc(session.timeline.duration)}"))
 
 
 def _render(session, *, preview: bool, output: str | None = None, width: int = 640) -> Path:
@@ -218,7 +279,7 @@ def _render(session, *, preview: bool, output: str | None = None, width: int = 6
     if output:
         out = Path(output).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(path, out)
+        shutil.move(str(path), str(out))
         path = out
     print(f"\rRendered {path}                ")
     return path
@@ -362,6 +423,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("--layout", choices=["screen_only", "camera_only", "pip", "side_by_side", "stack"])
     p.set_defaults(func=cmd_assemble)
+
+    p = sub.add_parser("status", help="what has been done and what to do next")
+    p.add_argument("project")
+    p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("show", help="print the timeline")
     p.add_argument("project")

@@ -235,7 +235,7 @@ class App:
                                        "`ant auth login`) and restart `ave ui`.") from exc
                 raise
             bus.publish({"type": "agent_done", "text": result.text, "stop_reason": result.stop_reason,
-                         "usage": result.usage.summary()})
+                         "usage": result.usage.summary(result.model)})
             return {"stop_reason": result.stop_reason}
         self.start_job("agent", run)
 

@@ -27,7 +27,7 @@ def analyze_asset(
     log: Log = print,
 ) -> None:
     asset = project.asset(asset_id)
-    if asset.has_audio and (force or project.speech(asset_id) is None):
+    if asset.has_audio and asset.role in SPEECH_ROLES and (force or project.speech(asset_id) is None):
         log(f"[{asset_id}] detecting speech and pauses…")
         samples = decode_audio(asset.path, 16000, stream=asset.audio_stream)
         project.save_speech(asset_id, analyze_speech(samples, 16000))
@@ -39,7 +39,14 @@ def analyze_asset(
             and (force or project.transcript(asset_id) is None)):
         log(f"[{asset_id}] transcribing with faster-whisper ({whisper_model})…")
         audio = decode_audio(asset.path, 16000, stream=asset.audio_stream)
-        project.save_transcript(asset_id, transcribe(audio, model=whisper_model, language=language))
+        last = [0.0]
+
+        def progress(done: float, total: float) -> None:
+            if done - last[0] >= 30 or (total and done >= total - 1):
+                last[0] = done
+                log(f"[{asset_id}] transcribed {done:.0f}/{total:.0f}s")
+        project.save_transcript(asset_id, transcribe(audio, model=whisper_model, language=language,
+                                                     progress=progress))
 
 
 def analyze_project(project: Project, *, do_transcribe: bool = True, whisper_model: str = "small",

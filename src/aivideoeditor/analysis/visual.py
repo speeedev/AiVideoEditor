@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..media.ffmpeg import run_ffmpeg
+from ..media.ffmpeg import FFmpegError, run_ffmpeg
 
 THUMB_W, THUMB_H = 64, 36
 
@@ -52,14 +52,14 @@ class VisualAnalysis:
 
 
 def decode_thumbs(path: str | Path, sample_fps: float) -> np.ndarray:
-    proc = run_ffmpeg(
-        [
-            "-i", str(path), "-map", "0:v:0", "-an",
+    args = ["-i", str(path), "-map", "0:v:0", "-an",
             "-vf", f"fps={sample_fps},scale={THUMB_W}:{THUMB_H}:flags=area,format=gray",
-            "-f", "rawvideo", "pipe:1",
-        ],
-        capture_stdout=True,
-    )
+            "-f", "rawvideo", "pipe:1"]
+    try:
+        # Hardware decoding makes long 4K/60 fps recordings much faster where available.
+        proc = run_ffmpeg(["-hwaccel", "auto", *args], capture_stdout=True)
+    except FFmpegError:
+        proc = run_ffmpeg(args, capture_stdout=True)
     data = np.frombuffer(proc.stdout, dtype=np.uint8)
     n = data.size // (THUMB_W * THUMB_H)
     return data[: n * THUMB_W * THUMB_H].reshape(n, THUMB_H, THUMB_W).astype(np.float32) / 255.0

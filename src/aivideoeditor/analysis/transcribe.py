@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Callable
+
     import numpy as np
 
 
@@ -85,8 +87,9 @@ def transcribe(
     model: str = "small",
     language: str | None = None,
     device: str = "auto",
-    compute_type: str = "default",
+    compute_type: str = "auto",
     initial_prompt: str | None = None,
+    progress: "Callable[[float, float], None] | None" = None,
 ) -> Transcript:
     try:
         from faster_whisper import WhisperModel  # type: ignore
@@ -108,7 +111,10 @@ def transcribe(
         initial_prompt=prompt,
     )
     out = Transcript(language=getattr(info, "language", language))
+    total = float(getattr(info, "duration", 0.0) or 0.0)
     for seg in segments:
+        if progress is not None:
+            progress(float(seg.end), total)
         words = [
             Word(float(w.start), float(w.end), w.word.strip(), float(getattr(w, "probability", 1.0)))
             for w in (seg.words or [])

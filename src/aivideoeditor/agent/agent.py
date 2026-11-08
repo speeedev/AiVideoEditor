@@ -16,6 +16,13 @@ from .tools import run_tool, tool_definitions
 
 DEFAULT_MODEL = "claude-opus-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# USD per million (input, output) tokens; used only for the cost estimate shown to the user.
+PRICES = {
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
 
 
 class Display:
@@ -44,9 +51,22 @@ class Usage:
         for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
             setattr(self, k, getattr(self, k) + int(getattr(usage, k, 0) or 0))
 
-    def summary(self) -> str:
-        return (f"{self.requests} requests · input {self.input_tokens:,} (+{self.cache_read_input_tokens:,} cached, "
+    def cost(self, model: str) -> float | None:
+        """Approximate cost in USD (standard first-party API prices, 5-minute cache)."""
+        price = PRICES.get(model)
+        if price is None:
+            return None
+        inp, out = price
+        return (self.input_tokens * inp + self.cache_creation_input_tokens * inp * 1.25
+                + self.cache_read_input_tokens * inp * 0.1 + self.output_tokens * out) / 1e6
+
+    def summary(self, model: str | None = None) -> str:
+        text = (f"{self.requests} requests · input {self.input_tokens:,} (+{self.cache_read_input_tokens:,} cached, "
                 f"{self.cache_creation_input_tokens:,} cache writes) · output {self.output_tokens:,}")
+        cost = self.cost(model) if model else None
+        if cost is not None:
+            text += f" · ≈ ${cost:.2f}"
+        return text
 
 
 @dataclass
@@ -55,6 +75,7 @@ class AgentResult:
     stop_reason: str
     turns: int
     usage: Usage
+    model: str = DEFAULT_MODEL
     last_render: Path | None = None
     tool_calls: list[str] = field(default_factory=list)
 
@@ -233,7 +254,16 @@ class EditAgent:
         else:
             self.load_conversation()
 
-        if not session.timeline.tracks and session.project.assets:
+        proj = session.project
+        unsynced = [x.id for x in proj.assets.values()
+                    if x.role in ("screen", "camera", "mic") and x.sync is None]
+        if len(unsynced) > 1 or (unsynced and any(x.sync for x in proj.assets.values())):
+            self.display.info(f"Note: not synced yet: {', '.join(unsynced)} (run `ave sync`).")
+        primary = session.primary_audio()
+        if primary and proj.transcript(primary) is None:
+            self.display.info(f"Note: no transcript for '{primary}'; Claude will rely on pauses and frames only "
+                              "(run `ave analyze` with transcription for content-aware editing).")
+        if not session.timeline.tracks and proj.assets:
             self.display.info("Timeline is empty: assembling the synced recordings first.")
             session.assemble()
 
@@ -315,4 +345,4 @@ class EditAgent:
             final_text = (f"Stopped after {self.max_turns} turns. The edit so far is saved; run `ave edit` again "
                           "to let the agent continue.")
         self._log({"event": "done", "stop_reason": stop_reason, "usage": self.usage.__dict__})
-        return AgentResult(final_text, stop_reason, turns, self.usage, self.ctx.last_render, tool_names)
+        return AgentResult(final_text, stop_reason, turns, self.usage, self.model, self.ctx.last_render, tool_names)

@@ -291,6 +291,14 @@ class SetCaptionsIn(BaseModel):
     y: float | None = Field(None, ge=0.1, le=1.0)
 
 
+class SetCanvasIn(BaseModel):
+    preset: Literal["landscape_1080p", "landscape_720p", "landscape_4k", "vertical_1080x1920", "square_1080",
+                    "custom"] = "landscape_1080p"
+    width: int | None = Field(None, ge=128, le=7680, description="custom only")
+    height: int | None = Field(None, ge=128, le=7680, description="custom only")
+    fps: float | None = Field(None, ge=10, le=120, description="Frame rate (default: keep)")
+
+
 class AddMarkerIn(BaseModel):
     time: float
     note: str
@@ -776,6 +784,31 @@ def set_captions(ctx, args: SetCaptionsIn) -> ToolOutput:
         raise EditError(f"no transcript for '{props['source_asset']}', captions need one")
     cap = ops.set_captions(ctx.session.timeline, **props)
     return f"Captions {'on' if cap.enabled else 'off'} (source {cap.source_asset}, {cap.max_words} words/line)."
+
+
+CANVAS_PRESETS = {"landscape_1080p": (1920, 1080), "landscape_720p": (1280, 720), "landscape_4k": (3840, 2160),
+                  "vertical_1080x1920": (1080, 1920), "square_1080": (1080, 1080)}
+
+
+@tool("set_canvas", SetCanvasIn, mutates=True)
+def set_canvas(ctx, args: SetCanvasIn) -> ToolOutput:
+    """Change the output frame size / frame rate (e.g. vertical 1080x1920 for Shorts/Reels/TikTok). Layout boxes
+    are relative, so re-apply suitable layouts (e.g. 'stack' for vertical) afterwards and check with
+    view_timeline."""
+    if args.preset == "custom":
+        if not (args.width and args.height):
+            raise EditError("custom canvas needs width and height")
+        w, h = args.width, args.height
+    else:
+        w, h = CANVAS_PRESETS[args.preset]
+    w, h = w - w % 2, h - h % 2
+    tl = ctx.session.timeline
+    tl.canvas.width, tl.canvas.height = w, h
+    if args.fps:
+        tl.canvas.fps = args.fps
+    proj = ctx.session.project
+    proj.data.canvas = tl.canvas.model_copy()
+    return f"Canvas is now {w}x{h} @ {tl.canvas.fps:g} fps."
 
 
 @tool("add_marker", AddMarkerIn, mutates=True)
