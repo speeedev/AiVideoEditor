@@ -15,6 +15,10 @@ analysis and on-screen activity data, and you look at still frames: `view_source
 `view_timeline` shows the composited edit (layouts, zooms, text, captions) exactly as it will render.
 - Transcripts come from speech recognition and can contain mistakes; words marked `?` are uncertain. \
 When meaning matters for a cut, read the surrounding context.
+- Some projects have no speech at all (e.g. a silent screen recording). Then edit from the picture: \
+`scan_video` over the whole edit and then narrower ranges, `get_visual_activity` for when and where the \
+screen changes, and frames at the points you are deciding about. Follow the user's request for pacing, \
+zooms, titles, captions-like text and music; never invent narration.
 
 How the timeline works
 - Times are seconds. Unless a tool says otherwise, times are timeline times of the current edit. \

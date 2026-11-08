@@ -71,7 +71,14 @@ def sync_project(project: Project, *, reference: str | None = None, max_offset: 
     """Find every recording's position on the reference recording's clock."""
     ref_id = reference or primary_audio_asset(project)
     if ref_id is None:
-        raise ValueError("no asset with audio to use as sync reference")
+        # Nothing to align by (e.g. a silent screen recording): every recording starts at 0.
+        log("no recording with audio: nothing to sync, all recordings start together "
+            "(use `ave sync --manual ASSET OFFSET` to shift one)")
+        for asset in project.assets.values():
+            if asset.role in ("screen", "camera", "mic") and asset.sync is None:
+                asset.sync = SyncInfo(reference=asset.id, offset=0.0, confidence=0.0, method="assumed")
+        project.save()
+        return {a.id: a.sync for a in project.assets.values() if a.sync}
     ref = project.asset(ref_id)
     if not ref.has_audio:
         raise ValueError(f"reference '{ref_id}' has no audio")

@@ -106,6 +106,7 @@ class App:
                 assets.append({
                     "id": a.id, "role": a.role, "path": a.path, "name": Path(a.path).name,
                     "duration": a.duration, "has_video": a.has_video, "has_audio": a.has_audio,
+                    "is_image": a.is_image, "audio_stream": a.audio_stream,
                     "width": a.info.get("width"), "height": a.info.get("height"),
                     "sync": a.sync.model_dump() if a.sync else None,
                     "analysis": {"transcript": tr is not None, "speech": p.speech(a.id) is not None,

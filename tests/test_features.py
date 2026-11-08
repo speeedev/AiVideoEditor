@@ -248,3 +248,42 @@ def test_long_audio_fade_survives_chunk_boundaries(session, tmp_path):
             continue
         ratio = np.abs(got[i0:i0 + 2400]).sum() / np.abs(seg_src).sum()
         assert abs(ratio - (end - t) / 3.0) < 0.1, (t, ratio)
+
+
+def test_silent_screen_recording_project(tmp_path):
+    """Only a screen recording, no audio at all: analysis, sync, editing tools and MP4 output still work."""
+    from aivideoeditor.pipeline import analyze_project
+    from aivideoeditor.project import Project
+    from aivideoeditor.session import EditorSession
+    screen = tmp_path / "screen.mp4"
+    # A static "editor" where small text is being typed only between 4 s and 7 s at the bottom right.
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x1e1e2e:s=1280x720:r=30:d=12",
+                "-vf", "drawtext=text='%{eif\\:floor(t*5)\\:d}':x=1080:y=600:fontsize=24:fontcolor=white:"
+                       "enable='between(t,4,7)'",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-an", "-y", str(screen)])
+    p = Project.create(tmp_path / "p", width=1280, height=720)
+    p.add_asset(screen, "screen")
+    analyze_project(p, log=lambda m: None)
+    vis = p.visual("screen")
+    assert len(vis.active) == 1
+    a, b = vis.active[0]
+    assert 3.0 <= a <= 4.5 and 6.5 <= b <= 8.0
+    x, y, w, h = vis.regions[0]
+    assert x > 0.75 and y > 0.75 and w < 0.15 and h < 0.1    # the change is localised at the bottom right
+    res = sync_project(p, log=lambda m: None)                  # nothing to sync, no error
+    assert res["screen"].method == "assumed"
+
+    s = EditorSession(p)
+    s.assemble()
+    ctx = NS(session=s)
+    out, err = run_tool(ctx, "get_transcript", {})
+    assert not err and "no recording with audio" in out
+    out, err = run_tool(ctx, "get_visual_activity", {})
+    assert not err and "[x0.8" in out
+    out, err = run_tool(ctx, "scan_video", {"frames": 6})
+    assert not err and out[1]["type"] == "image"
+    out, err = run_tool(ctx, "ripple_delete", {"ranges": [{"start": 8, "end": 12}]})
+    assert not err
+    out_file = s.render(preview=False)
+    info = probe(out_file)
+    assert info.has_video and info.has_audio and abs(info.duration - 8.0) < 0.1

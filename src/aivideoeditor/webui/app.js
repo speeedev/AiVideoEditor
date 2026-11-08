@@ -84,9 +84,9 @@ function renderAssets() {
     const item = el("div", "asset");
     item.style.borderLeftColor = `var(--${["screen", "camera", "mic", "music", "broll"].includes(a.role) ? a.role : "other"})`;
     item.appendChild(el("div", "name", a.name));
-    const meta = [tc(a.duration)];
-    if (a.has_video) meta.push(`${a.width}×${a.height}`);
-    meta.push(a.has_audio ? "ses var" : "ses yok");
+    const meta = a.is_image ? ["resim", `${a.width}×${a.height}`] : [tc(a.duration)];
+    if (a.has_video && !a.is_image) meta.push(`${a.width}×${a.height}`);
+    if (!a.is_image) meta.push(a.has_audio ? (a.audio_stream ? `ses track #${a.audio_stream}` : "ses var") : "ses yok");
     item.appendChild(el("div", "meta", `${a.id} · ${meta.join(" · ")}`));
     const badges = el("div", "badges");
     const b = (text, cls) => badges.appendChild(el("span", "badge " + (cls || ""), text));
@@ -128,6 +128,7 @@ function guessRole(name) {
   if (/screen|ekran|display|capture|obs/.test(n)) return "screen";
   if (/cam|kamera|webcam|face|yuz|yüz/.test(n)) return "camera";
   if (/\.(wav|mp3|m4a|aac|flac|ogg|aiff?)$/.test(n)) return "mic";
+  if (/\.(png|jpe?g|webp|gif|bmp)$/.test(n)) return "other";
   return "other";
 }
 async function uploadFiles(files) {

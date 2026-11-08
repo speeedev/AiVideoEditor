@@ -325,6 +325,11 @@ class AssembleIn(BaseModel):
 
 # ----------------------------------------------------------------- helpers --
 
+NO_SPEECH = ("This project has no recording with audio, so there is no speech to read. Edit from the "
+             "picture: scan_video and get_visual_activity show what happens on screen and where; view_source "
+             "and view_timeline show frames.")
+
+
 def _primary(ctx, asset_id: str | None) -> str:
     aid = asset_id or ctx.session.primary_audio()
     if aid is None:
@@ -393,6 +398,8 @@ def get_timeline(ctx, args: GetTimelineIn) -> ToolOutput:
 def get_transcript(ctx, args: GetTranscriptIn) -> ToolOutput:
     """What is said and when. In the timeline timebase the times are positions in the current edit, already
     accounting for every cut; '✂' marks a cut, '(pause Xs)' a silence, '?' a low-confidence word."""
+    if args.asset_id is None and ctx.session.primary_audio() is None:
+        return NO_SPEECH
     aid = _primary(ctx, args.asset_id)
     proj = ctx.session.project
     tr = proj.transcript(aid)
@@ -414,6 +421,8 @@ def get_transcript(ctx, args: GetTranscriptIn) -> ToolOutput:
 def find_edit_candidates(ctx, args: FindCandidatesIn) -> ToolOutput:
     """Proposes ranges to cut (nothing is changed): long pauses, filler words (um/uh, eee/ıı) or repeated
     phrases that suggest a retake. Review them, then pass the ones you agree with to ripple_delete."""
+    if args.asset_id is None and ctx.session.primary_audio() is None:
+        return NO_SPEECH
     aid = _primary(ctx, args.asset_id)
     proj = ctx.session.project
     tl = ctx.session.timeline
@@ -476,47 +485,124 @@ def view_source(ctx, args: ViewSourceIn) -> ToolOutput:
             image_block(sheet)]
 
 
+def _default_video_asset(ctx) -> str | None:
+    proj = ctx.session.project
+    return (next((a.id for a in proj.assets.values() if a.role == "screen" and a.has_video), None)
+            or next((a.id for a in proj.assets.values() if a.has_video and not a.is_image), None))
+
+
+def _activity_on_timeline(ctx, aid: str, lo: float, hi: float):
+    """Active spans (with change regions) and hard cuts of an asset, projected onto the timeline."""
+    vis = ctx.session.project.visual(aid)
+    tl = ctx.session.timeline
+    active: list[tuple[float, float, list[float] | None]] = []
+    cuts: list[float] = []
+    if vis is None:
+        return None, active, cuts
+    for _, c in asset_clips(tl, aid):
+        for (a, b), region in zip(vis.active, vis.regions):
+            s0, s1 = max(a, c.source_in), min(b, c.source_out)
+            if s1 > s0:
+                ta, tb = c.timeline_time(s0), c.timeline_time(s1)
+                if tb > lo and ta < hi:
+                    active.append((max(ta, lo), min(tb, hi), region))
+        for t in vis.scene_cuts:
+            if c.source_in <= t < c.source_out and lo <= c.timeline_time(t) <= hi:
+                cuts.append(c.timeline_time(t))
+    active.sort(key=lambda x: x[0])
+    return vis, active, sorted(cuts)
+
+
+def _region_text(r: list[float] | None) -> str:
+    if not r:
+        return ""
+    x, y, w, h = r
+    if w > 0.9 and h > 0.9:
+        return " [whole screen]"
+    return f" [x{x:.2f}-{x + w:.2f} y{y:.2f}-{y + h:.2f}]"
+
+
 @tool("get_visual_activity", VisualActivityIn)
 def get_visual_activity(ctx, args: VisualActivityIn) -> ToolOutput:
-    """When something changes on screen (typing, scrolling, windows) and where hard cuts are, mapped onto the
-    timeline. Idle stretches are candidates for speed_up; busy ones may need a zoom."""
-    proj = ctx.session.project
-    aid = args.asset_id
-    if aid is None:
-        aid = next((a.id for a in proj.assets.values() if a.role == "screen"), None) or \
-              next((a.id for a in proj.assets.values() if a.has_video), None)
+    """When and where something changes on screen (typing, cursor, scrolling, windows opening) and where hard cuts
+    are, mapped onto the timeline. Regions are normalised [x0-x1 y0-y1] of the source frame: use them to place
+    zooms. Idle stretches are candidates for speed_up or cutting."""
+    aid = args.asset_id or _default_video_asset(ctx)
     if aid is None:
         return "No video assets."
-    vis = proj.visual(aid)
-    if vis is None:
-        return f"No visual analysis for '{aid}' (run `ave analyze`)."
     tl = ctx.session.timeline
     lo = args.start if args.start is not None else 0.0
     hi = args.end if args.end is not None else tl.duration
-    active: list[tuple[float, float]] = []
-    cuts: list[float] = []
-    for _, c in asset_clips(tl, aid):
-        for a, b in vis.active:
-            s0, s1 = max(a, c.source_in), min(b, c.source_out)
-            if s1 > s0:
-                active.append((c.timeline_time(s0), c.timeline_time(s1)))
-        for t in vis.scene_cuts:
-            if c.source_in <= t < c.source_out:
-                cuts.append(c.timeline_time(t))
-    active = sorted((max(a, lo), min(b, hi)) for a, b in active if b > lo and a < hi)
+    vis, active, cuts = _activity_on_timeline(ctx, aid, lo, hi)
+    if vis is None:
+        return f"No visual analysis for '{aid}' (run `ave analyze`)."
     idle: list[tuple[float, float]] = []
     cur = lo
-    for a, b in active:
+    for a, b, _ in active:
         if a - cur >= 3.0:
             idle.append((cur, a))
         cur = max(cur, b)
     if hi - cur >= 3.0:
         idle.append((cur, hi))
+    act = ", ".join(f"{a:.1f}–{b:.1f}{_region_text(r)}" for a, b, r in active[:200]) or "none"
     lines = [f"Visual activity of {aid} on the timeline {format_tc(lo)}–{format_tc(hi)}:",
-             "Active (screen changing): " + (", ".join(f"{a:.1f}–{b:.1f}" for a, b in active[:200]) or "none"),
+             "Active (screen changing): " + act,
              "Idle ≥3s (static screen): " + (", ".join(f"{a:.1f}–{b:.1f}" for a, b in idle[:200]) or "none"),
-             "Hard cuts / big changes: " + (", ".join(f"{t:.2f}" for t in sorted(cuts) if lo <= t <= hi) or "none")]
+             "Hard cuts / big changes: " + (", ".join(f"{t:.2f}" for t in cuts) or "none")]
     return "\n".join(lines)
+
+
+class ScanVideoIn(BaseModel):
+    start: float | None = Field(None, description="Timeline range start (default: beginning)")
+    end: float | None = Field(None, description="Timeline range end (default: end)")
+    frames: int = Field(12, ge=4, le=16, description="How many frames to look at")
+    asset_id: str | None = Field(None, description="Video whose activity guides the frame choice (default: screen)")
+
+
+@tool("scan_video", ScanVideoIn)
+def scan_video(ctx, args: ScanVideoIn) -> ToolOutput:
+    """Look through a stretch of the edit at the moments where the picture changes (plus evenly spaced fill) in
+    one contact sheet. The fastest way to understand footage without narration, e.g. a silent screen recording:
+    scan the whole video first, then scan narrower ranges."""
+    tl = ctx.session.timeline
+    if tl.duration <= 0:
+        return "The timeline is empty."
+    lo = max(0.0, args.start if args.start is not None else 0.0)
+    hi = min(tl.duration, args.end if args.end is not None else tl.duration)
+    if hi <= lo:
+        raise EditError("end must be after start")
+    aid = args.asset_id or _default_video_asset(ctx)
+    candidates: list[float] = []
+    if aid:
+        _, active, cuts = _activity_on_timeline(ctx, aid, lo, hi)
+        for a, b, _ in active:
+            candidates.append(min(a + 0.4, b))           # just after something starts changing
+            if b - a > 6:
+                candidates.append((a + b) / 2)
+            candidates.append(max(b - 0.2, a))           # the settled result
+        candidates += [min(t + 0.3, hi) for t in cuts]
+    n = args.frames
+    span = hi - lo
+    min_gap = span / (n * 1.5)
+    chosen: list[float] = []
+    for t in sorted(candidates):
+        if lo <= t < hi and all(abs(t - c) >= min_gap for c in chosen):
+            chosen.append(t)
+    # Fill the gaps with evenly spaced frames so quiet parts are seen too.
+    k = 0
+    while len(chosen) < n and k < 4 * n:
+        k += 1
+        gaps = sorted([lo] + chosen + [hi])
+        a, b = max(zip(gaps, gaps[1:]), key=lambda g: g[1] - g[0])
+        chosen.append((a + b) / 2)
+    if len(chosen) > n:
+        step = len(chosen) / n
+        chosen = [sorted(chosen)[int(i * step)] for i in range(n)]
+    times = sorted(min(max(t, 0.0), tl.duration - 1e-3) for t in chosen)
+    sheet = ctx.session.timeline_sheet(times, thumb_width=384, columns=4)
+    return [{"type": "text", "text": f"Frames of the edit {format_tc(lo)}–{format_tc(hi)} at "
+                                     f"{', '.join(f'{t:.1f}' for t in times)} (chosen at visual changes):"},
+            image_block(sheet)]
 
 
 # ---------------------------------------------------------------- editing --
