@@ -16,6 +16,7 @@ from .project import Project
 
 FORMATS: dict[str, tuple[str, int, int]] = {
     "landscape_1080p": ("Yatay 1080p (YouTube)", 1920, 1080),
+    "landscape_1440p": ("Yatay 1440p / 2K", 2560, 1440),
     "landscape_720p": ("Yatay 720p", 1280, 720),
     "landscape_4k": ("Yatay 4K", 3840, 2160),
     "vertical": ("Dikey 1080×1920 (Shorts / Reels / TikTok)", 1080, 1920),

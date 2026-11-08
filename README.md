@@ -102,7 +102,7 @@ ave ui demo-proje            # tarayıcıda editörü açar
 ave ui
 ```
 
-Diğer editörlerdeki gibi bir proje ekranı açılır: **Yeni proje** (ad, format: yatay/dikey/kare/4K ve isteğe bağlı
+Diğer editörlerdeki gibi bir proje ekranı açılır: **Yeni proje** (ad, format: yatay 720p/1080p/2K/4K, dikey, kare ve isteğe bağlı
 video açıklaması) ya da **Son projeler** listesinden birini aç. Projeler varsayılan olarak `Filmler/AVE Projeleri`
 (Windows'ta `Videolar/AVE Projeleri`) klasörüne kaydedilir. Klasörü `AVE_WORKSPACE` ile değiştirebilirsin.
 Her değişiklik anında kaydedilir; **Kaydet** (Cmd/Ctrl+S) bunu elle de yapar, **Farklı kaydet** projenin kopyasını
@@ -183,7 +183,7 @@ varsayılan `claude-opus-5-5`, abonelik modunda Claude Code'un varsayılanı). A
 | `place_clip`, `move_clip`, `trim_clip`, `split`, `lift`, `delete_clips`, `set_clip_properties` | klip düzeyinde ince ayar |
 | `set_track` | sessize alma, gizleme, kilitleme, ducking, **gürültü azaltma** ve **ses iyileştirme** |
 | `add_marker` | insan editöre not |
-| `set_canvas` | çıktı boyutu: yatay 1080p/4K, dikey 1080×1920 (Shorts/Reels), kare |
+| `set_canvas` | çıktı boyutu: yatay 720p/1080p/1440p (2K)/4K, dikey 1080×1920 (Shorts/Reels), kare |
 | `save_text` | YouTube başlığı, açıklama, bölüm (chapter) listesi gibi metinleri `exports/` altına kaydeder |
 | `undo`, `render_preview`, `assemble_timeline` | geri alma, ön izleme, baştan kurma |
 

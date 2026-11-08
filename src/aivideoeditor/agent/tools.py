@@ -294,8 +294,8 @@ class SetCaptionsIn(BaseModel):
 
 
 class SetCanvasIn(BaseModel):
-    preset: Literal["landscape_1080p", "landscape_720p", "landscape_4k", "vertical_1080x1920", "square_1080",
-                    "custom"] = "landscape_1080p"
+    preset: Literal["landscape_1080p", "landscape_1440p", "landscape_720p", "landscape_4k", "vertical_1080x1920",
+                    "square_1080", "custom"] = "landscape_1080p"
     width: int | None = Field(None, ge=128, le=7680, description="custom only")
     height: int | None = Field(None, ge=128, le=7680, description="custom only")
     fps: float | None = Field(None, ge=10, le=120, description="Frame rate (default: keep)")
@@ -879,13 +879,14 @@ def set_captions(ctx, args: SetCaptionsIn) -> ToolOutput:
     return f"Captions {'on' if cap.enabled else 'off'} (source {cap.source_asset}, {cap.max_words} words/line)."
 
 
-CANVAS_PRESETS = {"landscape_1080p": (1920, 1080), "landscape_720p": (1280, 720), "landscape_4k": (3840, 2160),
+CANVAS_PRESETS = {"landscape_1080p": (1920, 1080), "landscape_1440p": (2560, 1440), "landscape_720p": (1280, 720),
+                  "landscape_4k": (3840, 2160),
                   "vertical_1080x1920": (1080, 1920), "square_1080": (1080, 1080)}
 
 
 @tool("set_canvas", SetCanvasIn, mutates=True)
 def set_canvas(ctx, args: SetCanvasIn) -> ToolOutput:
-    """Change the output frame size / frame rate (e.g. vertical 1080x1920 for Shorts/Reels/TikTok). Layout boxes
+    """Change the output frame size / frame rate (e.g. 1440p/2K, 4K, or vertical 1080x1920 for Shorts/Reels/TikTok). Layout boxes
     are relative, so re-apply suitable layouts (e.g. 'stack' for vertical) afterwards and check with
     view_timeline."""
     if args.preset == "custom":
