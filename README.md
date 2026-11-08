@@ -76,7 +76,7 @@ Yani bu mod kişisel kullanım içindir; programı başkalarına dağıtırsan o
 
 1. **Web arayüzü:** `ave ui proje` → sağ paneldeki seçimden "Abonelik (Claude Code)".
 2. **Komut satırı:** `ave edit proje "talimat"` (Claude Code kuruluysa otomatik olarak abonelikle çalışır).
-3. **Doğrudan Claude Code içinde:** proje klasöründe `claude` çalıştır ve konuş. `ave init`, klasöre
+3. **Doğrudan Claude Code içinde:** proje klasöründe `claude` çalıştır ve konuş. Yeni projeler (arayüzden ya da `ave init`), klasöre
    `.mcp.json` (araçlar) ve `CLAUDE.md` (kurgu rehberi) yazar; eski projeler için `ave claude-setup proje`.
 
 ```bash
@@ -99,14 +99,19 @@ ave ui demo-proje            # tarayıcıda editörü açar
 ### Web arayüzü (önerilen)
 
 ```bash
-ave init benim-videom --brief "8-10 dk YouTube eğitimi, samimi anlatım, beklemeler kesilsin"
-ave ui benim-videom
+ave ui
 ```
 
-Tarayıcıda açılan editörde:
+Diğer editörlerdeki gibi bir proje ekranı açılır: **Yeni proje** (ad, format: yatay/dikey/kare/4K ve isteğe bağlı
+video açıklaması) ya da **Son projeler** listesinden birini aç. Projeler varsayılan olarak `Filmler/AVE Projeleri`
+(Windows'ta `Videolar/AVE Projeleri`) klasörüne kaydedilir. Klasörü `AVE_WORKSPACE` ile değiştirebilirsin.
+Her değişiklik anında kaydedilir; **Kaydet** (Cmd/Ctrl+S) bunu elle de yapar, **Farklı kaydet** projenin kopyasını
+yeni adla açar (ör. aynı videonun dikey sürümü için). Üstteki **☰ Projeler** ile projeler arasında geçersin.
 
-1. **Kayıtlar:** dosyaları sürükleyip bırak (ya da yerel yolunu yaz, büyük dosyalar kopyalanmaz) ve her
-   birine rol ver: ekran, kamera, mikrofon, müzik.
+Proje açıldıktan sonra:
+
+1. **Kayıtlar:** dosyaları sürükleyip bırak (ya da yerel yolunu yaz, büyük dosyalar kopyalanmaz). Rol (ekran,
+   kamera, mikrofon, müzik, resim) dosyanın içeriğine göre otomatik seçilir; gerekirse listeden değiştir.
 2. **Analiz:** dili ve Whisper modelini seç, sonra *Analiz*'e bas.
 3. **Senkron:** kayıtları sese göre hizalar. Ardından *Timeline kur* senkronlu kayıtları timeline'a dizer
    (timeline boşsa Claude ilk talimatta bunu kendisi yapar).

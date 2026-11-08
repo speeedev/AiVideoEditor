@@ -9,6 +9,9 @@
 <body>
 <header class="topbar">
   <div class="brand">AVE <span id="projectName" class="muted"></span></div>
+  <button id="btnProjects" class="small" title="Projeler">☰ Projeler</button>
+  <button id="btnSave" class="small" title="Kaydet (Cmd/Ctrl+S) — değişiklikler zaten otomatik kaydedilir">💾 Kaydet</button>
+  <button id="btnSaveAs" class="small" title="Projenin kopyasını yeni bir adla oluştur">Farklı kaydet…</button>
   <div class="actions">
     <button id="btnAnalyze" title="Transkript, sessizlik ve görsel analiz">Analiz</button>
     <button id="btnSync" title="Kayıtları sese göre senkronla">Senkron</button>
@@ -146,6 +149,33 @@
     </div>
   </aside>
 </main>
+<div id="launcher" class="launcher hidden">
+  <div class="launcher-box">
+    <h1>AI Video Editor</h1>
+    <p class="muted">Kayıtlarını ekle, Claude kurgulasın.</p>
+    <div class="launcher-grid">
+      <section>
+        <h3>Yeni proje</h3>
+        <label class="small muted">Proje adı</label>
+        <input id="newName" placeholder="Örn: Ürün tanıtım videosu">
+        <label class="small muted">Format</label>
+        <select id="newFormat"></select>
+        <label class="small muted">Video hakkında (isteğe bağlı)</label>
+        <textarea id="newBrief" rows="3" placeholder="Amaç, hedef kitle, hedef süre…"></textarea>
+        <button id="btnCreate" class="primary">Oluştur</button>
+        <p class="small muted" id="workspaceText"></p>
+      </section>
+      <section>
+        <h3>Son projeler</h3>
+        <div id="projectList" class="project-list"></div>
+        <div class="row">
+          <input id="openPath" placeholder="veya proje klasörünün yolu">
+          <button id="btnOpenPath" class="small">Aç</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
 <div id="lightbox" class="lightbox hidden"><img alt=""></div>
 <script src="/static/app.js"></script>
 </body>

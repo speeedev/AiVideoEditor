@@ -53,7 +53,47 @@ function refreshSoon() {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => refresh().catch(() => {}), 150);
 }
+let shownProject = null;
+function renderLauncher() {
+  $("launcher").classList.remove("hidden");
+  const fmt = $("newFormat");
+  if (!fmt.options.length) {
+    for (const f of S.formats) fmt.appendChild(Object.assign(el("option", "", f.label), { value: f.id }));
+  }
+  $("workspaceText").textContent = `Projeler şuraya kaydedilir: ${S.workspace}`;
+  const list = $("projectList");
+  list.innerHTML = "";
+  if (!S.projects.length) list.appendChild(el("div", "muted small", "Henüz proje yok. Soldan yeni bir proje oluştur."));
+  for (const p of S.projects) {
+    const b = el("button", "project-item");
+    b.appendChild(el("b", "", p.name));
+    b.appendChild(el("span", "muted", `${p.modified_text} · ${p.assets} kayıt · ${p.duration ? tc(p.duration) : "boş timeline"} · ${p.canvas}`));
+    if (p.brief) b.appendChild(el("span", "muted", p.brief));
+    b.title = p.path;
+    b.onclick = guard(() => openProject(p.path));
+    list.appendChild(b);
+  }
+  setBusy(S.job);
+}
+async function openProject(path) {
+  await api("/api/projects/open", { path });
+  await refresh();
+}
 function renderAll() {
+  if (!S.project) { shownProject = null; renderLauncher(); return; }
+  $("launcher").classList.add("hidden");
+  if (shownProject !== S.project.root) {
+    // A different project was opened: reset per-project UI state.
+    shownProject = S.project.root;
+    $("chat").innerHTML = "";
+    $("suggestions").classList.remove("hidden");
+    selection = null;
+    playhead = 0;
+    userZoomed = false;
+    $("video").removeAttribute("src");
+    showTab("frame");
+    loadConversation().catch(() => {});
+  }
   $("projectName").textContent = S.project.name;
   if (document.activeElement !== $("brief")) $("brief").value = S.project.brief || "";
   $("model").value = S.model || "";
@@ -74,6 +114,7 @@ function renderAll() {
 function setBusy(job) {
   const busy = !!job;
   $("jobSpinner").classList.toggle("hidden", !busy);
+  ["btnProjects", "btnSaveAs"].forEach((id) => { $(id).disabled = busy; });
   ["btnAnalyze", "btnSync", "btnAssemble", "btnUndo", "btnRedo", "btnPreview", "btnFinal", "send"].forEach(
     (id) => { $(id).disabled = busy; });
   if (busy) status(`${job} çalışıyor…`);
@@ -355,7 +396,7 @@ function shortArgs(args) {
 function handleEvent(ev) {
   const chat = $("chat");
   switch (ev.type) {
-    case "state": refreshSoon(); break;
+    case "state": case "project": refreshSoon(); break;
     case "log": status(ev.message); break;
     case "progress": {
       $("progress").classList.remove("hidden");
@@ -496,6 +537,30 @@ function wire() {
   $("tlZoom").oninput = () => { pps = +$("tlZoom").value; userZoomed = true; renderTimeline(); };
   $("tlFit").onclick = () => { userZoomed = false; renderTimeline(); };
   $("send").onclick = send;
+  $("btnProjects").onclick = guard(async () => { await api("/api/projects/close", {}); await refresh(); });
+  $("btnSave").onclick = guard(async () => {
+    const r = await api("/api/save", {});
+    status(`Kaydedildi ${r.saved_at} (değişiklikler ayrıca otomatik kaydedilir)`);
+  });
+  $("btnSaveAs").onclick = guard(async () => {
+    const name = prompt("Yeni proje adı:", `${S.project.name} (kopya)`);
+    if (!name) return;
+    await api("/api/save_as", { name });
+    await refresh();
+    status(`"${name}" olarak kaydedildi ve açıldı`);
+  });
+  $("btnCreate").onclick = guard(async () => {
+    const name = $("newName").value.trim();
+    if (!name) { status("Proje adı yaz", true); $("newName").focus(); return; }
+    await api("/api/projects/new", { name, format: $("newFormat").value, brief: $("newBrief").value });
+    $("newName").value = ""; $("newBrief").value = "";
+    await refresh();
+  });
+  $("newName").onkeydown = (e) => { if (e.key === "Enter") $("btnCreate").click(); };
+  $("btnOpenPath").onclick = guard(async () => {
+    const p = $("openPath").value.trim();
+    if (p) { await openProject(p); $("openPath").value = ""; }
+  });
   $("selClear").onclick = () => { selection = null; drawSelection(); };
   $("selCut").onclick = guard(async () => {
     if (!selection) return;
@@ -529,6 +594,11 @@ function wire() {
   });
 
   document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && S && S.project) {
+      e.preventDefault();
+      $("btnSave").click();
+      return;
+    }
     if (["TEXTAREA", "INPUT", "SELECT"].includes(document.activeElement.tagName)) return;
     const fps = S ? S.timeline.canvas.fps : 30;
     if ((e.key === "Delete" || e.key === "Backspace") && selection) { $("selCut").click(); }
@@ -550,4 +620,4 @@ function wire() {
 }
 
 wire();
-refresh().then(loadConversation).catch((e) => status(e.message, true));
+refresh().catch((e) => status(e.message, true));

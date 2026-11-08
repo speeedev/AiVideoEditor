@@ -523,8 +523,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.set_defaults(func=cmd_mcp)
 
-    p = sub.add_parser("ui", help="open the local web editor (timeline, preview, chat with Claude)")
-    p.add_argument("project")
+    p = sub.add_parser("ui", help="open the editor (without a project: create or pick one in the window)")
+    p.add_argument("project", nargs="?")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true")

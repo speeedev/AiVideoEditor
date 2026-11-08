@@ -28,6 +28,13 @@ from .project import ROLES, Project
 STATIC = Path(__file__).parent / "webui"
 
 
+_NO_PROJECT_OK = ("/", "/index.html", "/api/state", "/api/events", "/api/settings")
+
+
+def _needs_project(path: str) -> bool:
+    return not (path in _NO_PROJECT_OK or path.startswith("/static/") or path.startswith("/api/projects"))
+
+
 def _claude_binary() -> str | None:
     from .agent.claude_code import claude_binary
     return claude_binary()
@@ -62,13 +69,18 @@ class Busy(RuntimeError):
     pass
 
 
+class NoProject(RuntimeError):
+    pass
+
+
 class App:
-    def __init__(self, project_path: str, *, model: str | None = None, effort: str = "high",
-                 backend: str = "auto"):
+    def __init__(self, project_path: str | None = None, *, model: str | None = None, effort: str = "high",
+                 backend: str = "auto", workspace: str | None = None):
         from .agent import DEFAULT_MODEL, resolve_backend
-        self.project = Project.open(project_path)
-        from .session import EditorSession
-        self.session = EditorSession(self.project)
+        from .workspace import default_workspace
+        self.project: Project | None = None
+        self.session = None
+        self.workspace = Path(workspace).expanduser() if workspace else default_workspace()
         self.lock = threading.RLock()
         self.bus = EventBus()
         self.backend = resolve_backend(backend)
@@ -77,6 +89,70 @@ class App:
         self.job: str | None = None
         self._job_lock = threading.Lock()
         self.agent = None
+        if project_path:
+            self.open_project(project_path)
+
+    # -- projects -------------------------------------------------------------
+    def open_project(self, path: str) -> dict:
+        from .session import EditorSession
+        from .workspace import remember
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
+        project = Project.open(path)
+        with self.lock:
+            self.project = project
+            self.session = EditorSession(project)
+        remember(project.root)
+        self.bus.publish({"type": "project"})
+        return {"path": str(project.root), "name": project.data.name}
+
+    def new_project(self, name: str, fmt: str, brief: str = "") -> dict:
+        from .workspace import create_project
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
+        if not name.strip():
+            raise ValueError("project name is empty")
+        project = create_project(name, fmt, workspace=self.workspace, brief=brief)
+        return self.open_project(str(project.root))
+
+    def save(self) -> dict:
+        """Everything is saved on every change; this is the explicit 'Save' for peace of mind."""
+        with self.lock:
+            self.project.save()
+        return {"saved_at": time.strftime("%H:%M:%S")}
+
+    def save_as(self, name: str) -> dict:
+        from .workspace import duplicate_project
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
+        if not name.strip():
+            raise ValueError("name is empty")
+        with self.lock:
+            self.project.save()
+            copy = duplicate_project(self.project, name)
+        return self.open_project(str(copy.root))
+
+    def close_project(self) -> None:
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
+        with self.lock:
+            self.project = None
+            self.session = None
+        self.bus.publish({"type": "project"})
+
+    def launcher_state(self) -> dict[str, Any]:
+        from .workspace import FORMATS, list_projects
+        return {
+            "project": None,
+            "projects": list_projects(self.workspace),
+            "workspace": str(self.workspace),
+            "formats": [{"id": k, "label": v[0]} for k, v in FORMATS.items()],
+            "job": self.job,
+            "model": self.model,
+            "effort": self.effort,
+            "backend": self.backend,
+            "claude_code_available": bool(_claude_binary()),
+        }
 
     # -- jobs -----------------------------------------------------------------
     def start_job(self, name: str, fn) -> None:
@@ -106,6 +182,8 @@ class App:
 
     # -- state ----------------------------------------------------------------
     def state(self) -> dict[str, Any]:
+        if self.project is None:
+            return self.launcher_state()
         with self.lock:
             p = self.project
             assets = []
@@ -393,6 +471,8 @@ def make_handler(app: App):
             url = urlparse(self.path)
             path = url.path
             qs = parse_qs(url.query)
+            if app.project is None and _needs_project(path):
+                return self._error("no project is open", 409)
             try:
                 if path in ("/", "/index.html"):
                     return self._file(STATIC / "index.html", "text/html; charset=utf-8")
@@ -456,10 +536,24 @@ def make_handler(app: App):
             url = urlparse(self.path)
             path = url.path
             qs = parse_qs(url.query)
+            if app.project is None and _needs_project(path):
+                return self._error("no project is open", 409)
             try:
                 if path == "/api/upload":
                     return self._upload(qs)
                 body = self._body()
+                if path == "/api/projects/new":
+                    return self._json(app.new_project(body.get("name", ""), body.get("format", "landscape_1080p"),
+                                                      body.get("brief", "")))
+                if path == "/api/projects/open":
+                    return self._json(app.open_project(body.get("path", "")))
+                if path == "/api/projects/close":
+                    app.close_project()
+                    return self._json({"ok": True})
+                if path == "/api/save":
+                    return self._json(app.save())
+                if path == "/api/save_as":
+                    return self._json(app.save_as(body.get("name", "")))
                 if path == "/api/assets":
                     return self._json(app.add_asset(body["path"], body.get("role", "other"),
                                                     body.get("audio_stream", 0)))
@@ -569,14 +663,15 @@ def make_handler(app: App):
     return Handler
 
 
-def serve(project_path: str, *, host: str = "127.0.0.1", port: int = 8765, model: str | None = None,
+def serve(project_path: str | None = None, *, host: str = "127.0.0.1", port: int = 8765, model: str | None = None,
           effort: str = "high", backend: str = "auto", open_browser: bool = True) -> None:
     app = App(project_path, model=model, effort=effort, backend=backend)
     httpd = ThreadingHTTPServer((host, port), make_handler(app))
     httpd.daemon_threads = True
     url = f"http://{host}:{port}/"
     mode = "Claude subscription (Claude Code)" if app.backend == "claude-code" else "Anthropic API key"
-    print(f"AI Video Editor UI for {app.project.root}\n  {url}\n  Claude: {mode}\n(Ctrl+C to stop)")
+    where = app.project.root if app.project else f"projects in {app.workspace}"
+    print(f"AI Video Editor UI ({where})\n  {url}\n  Claude: {mode}\n(Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
