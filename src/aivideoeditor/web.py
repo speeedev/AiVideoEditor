@@ -168,6 +168,9 @@ class App:
                 tl_copy = self.project.timeline.model_copy(deep=True)
             from .render.engine import RenderSettings, render_timeline
             st = RenderSettings.for_timeline(tl_copy, preview=preview)
+            if preview:
+                from .media.proxy import load_proxies
+                st.proxies = load_proxies(self.project)
             stamp = time.strftime("%Y%m%d-%H%M%S")
             out = self.project.renders_dir() / f"{'preview' if preview else 'final'}-{stamp}.mp4"
             words = self.session.caption_words()
@@ -183,6 +186,9 @@ class App:
         if tl.duration <= 0:
             raise ValueError("the timeline is empty")
         st = RenderSettings.for_timeline(tl, preview=True, preview_width=width)
+        if width <= 800:
+            from .media.proxy import load_proxies
+            st.proxies = load_proxies(self.project)
         with tempfile.TemporaryDirectory() as tmp:
             out = render_still(tl, self.project.assets, t, Path(tmp) / "f.jpg", st, caption_words=words)
             return out.read_bytes()

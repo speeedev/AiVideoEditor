@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from .analysis.frames import extract_frame, format_tc, make_sheet
+from .media.proxy import load_proxies
 from .project import Project
 from .render.engine import RenderSettings, render_still, render_timeline
 from .timeline.assemble import assemble, primary_audio_asset
@@ -105,6 +106,8 @@ class EditorSession:
     def render(self, *, preview: bool = True, name: str | None = None, progress=None,
                preview_width: int = 640) -> Path:
         st = RenderSettings.for_timeline(self.timeline, preview=preview, preview_width=preview_width)
+        if preview:
+            st.proxies = load_proxies(self.project)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         out = self.project.renders_dir() / (name or f"{'preview' if preview else 'final'}-{stamp}.mp4")
         return render_timeline(self.timeline, self.project.assets, out, st,
@@ -112,6 +115,8 @@ class EditorSession:
 
     def still(self, t: float, *, width: int = 768) -> Path:
         st = RenderSettings.for_timeline(self.timeline, preview=True, preview_width=width)
+        if width <= 800:
+            st.proxies = load_proxies(self.project)
         out = self.project.cache_dir("stills") / f"t{t:010.3f}.jpg"
         return render_still(self.timeline, self.project.assets, t, out, st,
                             caption_words=self.caption_words())

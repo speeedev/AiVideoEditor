@@ -161,6 +161,7 @@ benim-videom/
   timeline.json       güncel kurgu
   history/            her değişiklikten önceki timeline (geri alma)
   analysis/<kayıt>/   transcript.json, speech.json, visual.json
+  cache/proxies/      düşük çözünürlüklü düzenleme kopyaları
   agent/              Claude sohbeti (conversation.json) ve araç günlüğü (log.jsonl)
   renders/            ön izleme ve final videolar
   exports/            XML / OTIO / EDL
@@ -183,6 +184,10 @@ src/aivideoeditor/
   cli.py        `ave` komut satırı
 ```
 
+- **Proxy:** analiz sırasında yüksek çözünürlüklü videoların 360p, sık keyframe'li kopyaları üretilir. Ön
+  izleme render'ları ve Claude'un baktığı kareler bunlardan alınır (çok kesimli 10 dakikalık bir kurguda ön
+  izleme yaklaşık 2 kat hızlı, 12 karelik kontak sayfası 1 saniyenin altında). Final render her zaman
+  orijinal dosyaları kullanır.
 - **Render:** timeline zaman parçalarına bölünür. Her parça tek bir ffmpeg çalıştırmasıdır: klipler
   doğru noktadan açılır, `overlay` ile birleştirilir ve ses PCM olarak örnek hassasiyetinde karıştırılır.
   Parçalar kayıpsız birleştirilir. Çok kesimli, 1 saatlik bir kayıt da aynı güvenilirlikte render olur.

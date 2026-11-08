@@ -9,6 +9,7 @@ from .analysis.speech import analyze_speech
 from .analysis.sync import SYNC_SR, find_offset_arrays
 from .analysis.transcribe import transcribe
 from .analysis.visual import analyze_visual
+from .media.proxy import ensure_proxy
 from .project import Project, SyncInfo
 from .timeline.assemble import primary_audio_asset
 
@@ -35,6 +36,8 @@ def analyze_asset(
             and (force or project.visual(asset_id) is None)):
         log(f"[{asset_id}] analysing visual activity and scene cuts…")
         project.save_visual(asset_id, analyze_visual(asset.path))
+    if asset.has_video and asset.role in ("screen", "camera", "broll", "other"):
+        ensure_proxy(project, asset, log=log)
     if (do_transcribe and asset.has_audio and asset.role in SPEECH_ROLES
             and (force or project.transcript(asset_id) is None)):
         log(f"[{asset_id}] transcribing with faster-whisper ({whisper_model})…")

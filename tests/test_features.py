@@ -141,3 +141,27 @@ def test_save_text_tool(session):
     assert not err
     saved = session.project.root / "exports" / "evil_chapters.txt"
     assert saved.read_text(encoding="utf-8") == "00:00 Giriş"
+
+
+def test_proxies_for_preview(tmp_path):
+    from aivideoeditor.demo import make_demo
+    from aivideoeditor.media.proxy import load_proxies
+    from aivideoeditor.pipeline import analyze_project
+    from aivideoeditor.project import Project
+    from aivideoeditor.session import EditorSession
+    media = make_demo(tmp_path / "m", duration=4.0, size=(1280, 720), cam_size=(1280, 720))
+    p = Project.create(tmp_path / "p", width=1280, height=720)
+    p.add_asset(media.screen, "screen")
+    p.add_asset(media.mic, "mic")
+    analyze_project(p, do_transcribe=False, log=lambda m: None)
+    proxies = load_proxies(p)
+    assert set(proxies) == {"screen"} and proxies["screen"].height == 360
+    s = EditorSession(p)
+    s.assemble()
+    a = np.asarray(Image.open(s.still(1.0, width=640)).convert("L"), dtype=float)
+    p_no = Project.open(p.root)
+    (p.root / "cache" / "proxies" / "manifest.json").unlink()
+    b = np.asarray(Image.open(EditorSession(p_no).still(1.0, width=640)).convert("L"), dtype=float)
+    assert a.shape == b.shape and np.abs(a - b).mean() < 6   # same picture, just from the proxy
+    out = s.render(preview=True)
+    assert _frames(out) == round(s.timeline.duration * 30)

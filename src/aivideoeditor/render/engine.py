@@ -47,6 +47,7 @@ class RenderSettings:
     max_inputs: int = 24
     keep_work: bool = False
     duck_amount: float = 6.0  # compressor ratio used for ducking
+    proxies: dict = field(default_factory=dict)  # asset id -> Proxy (low-res video used for previews)
 
     @classmethod
     def for_timeline(cls, tl: Timeline, *, preview: bool = False, preview_width: int = 640) -> "RenderSettings":
@@ -69,7 +70,8 @@ class Segment:
     audio: bool
     starts_clip: bool
     ends_clip: bool
-    input_index: int = -1
+    video_input: int = -1
+    audio_input: int = -1
 
     @property
     def t0(self) -> float:
@@ -172,8 +174,13 @@ def _atempo_chain(speed: float) -> list[str]:
     return out
 
 
-def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: float) -> tuple[str, int, int]:
-    """Filters for one video segment; returns (chain, x, y) of the overlay position."""
+def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: float,
+                 dims: tuple[int, int] | None = None) -> tuple[str, int, int]:
+    """Filters for one video segment; returns (chain, x, y) of the overlay position.
+
+    ``dims`` is the pixel size of the decoded input (a proxy may be smaller
+    than the original asset).
+    """
     clip = seg.clip
     tr = clip.transform
     W, H = st.width, st.height
@@ -181,8 +188,11 @@ def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: f
     filters = [f"setpts=(PTS-STARTPTS)/{clip.speed:.6f}", f"fps={fps}",
                f"tpad=stop_mode=clone:stop_duration={seg.duration + 1:.3f}",
                f"trim=duration={seg.duration:.6f}"]
-    sw = int(asset.info.get("width") or W)
-    sh = int(asset.info.get("height") or H)
+    if dims:
+        sw, sh = dims
+    else:
+        sw = int(asset.info.get("width") or W)
+        sh = int(asset.info.get("height") or H)
     animated = _animated_zoom(clip, sw, sh)
     if tr.crop and not animated:
         cw, ch = _even(sw * tr.crop.w), _even(sh * tr.crop.h)
@@ -321,18 +331,36 @@ def build_chunk(
     dur = (chunk.f1 - chunk.f0) / st.fps
     n_frames = chunk.f1 - chunk.f0
     args: list[str] = []
-    for i, seg in enumerate(chunk.segments):
-        seg.input_index = i
-        asset = assets[seg.clip.asset_id]
-        pad = 0.25 * seg.clip.speed
-        if asset.info.get("is_image"):
-            args += ["-loop", "1", "-framerate", fps, "-t", f"{seg.duration + 0.5:.6f}", "-i", asset.path]
-        else:
-            args += ["-ss", f"{seg.src_in:.6f}", "-t", f"{seg.src_dur + pad:.6f}", "-i", asset.path]
+    n_inputs = 0
+    dims: dict[int, tuple[int, int]] = {}
 
-    graph: list[str] = []
+    def add_input(seg: Segment, path: str, is_image: bool) -> int:
+        nonlocal args, n_inputs
+        if is_image:
+            args += ["-loop", "1", "-framerate", fps, "-t", f"{seg.duration + 0.5:.6f}", "-i", path]
+        else:
+            pad = 0.25 * seg.clip.speed
+            args += ["-ss", f"{seg.src_in:.6f}", "-t", f"{seg.src_dur + pad:.6f}", "-i", path]
+        n_inputs += 1
+        return n_inputs - 1
+
     want_video = video_out is not None or image_out is not None
     want_audio = audio_out is not None
+    for seg in chunk.segments:
+        asset = assets[seg.clip.asset_id]
+        is_image = bool(asset.info.get("is_image"))
+        proxy = st.proxies.get(seg.clip.asset_id) if want_video and seg.video else None
+        if want_video and seg.video:
+            seg.video_input = add_input(seg, proxy.path if proxy else asset.path, is_image)
+            if proxy:
+                dims[seg.video_input] = (proxy.width, proxy.height)
+        if want_audio and seg.audio:
+            if seg.video_input >= 0 and proxy is None:
+                seg.audio_input = seg.video_input
+            else:
+                seg.audio_input = add_input(seg, asset.path, is_image)
+
+    graph: list[str] = []
 
     if want_video:
         graph.append(f"color=c={tl.canvas.background}:s={st.width}x{st.height}:r={fps}:d={dur + 1:.6f},"
@@ -342,8 +370,8 @@ def build_chunk(
         video_tracks = [t for t in tl.tracks if t.kind == "video"]
         for track in video_tracks:  # bottom layer first
             for seg in [s for s in chunk.segments if s.video and s.track is track]:
-                chain, x, y = _video_chain(seg, assets[seg.clip.asset_id], st, t0)
-                graph.append(f"[{seg.input_index}:v:0]{chain}[v{k}]")
+                chain, x, y = _video_chain(seg, assets[seg.clip.asset_id], st, t0, dims.get(seg.video_input))
+                graph.append(f"[{seg.video_input}:v:0]{chain}[v{k}]")
                 graph.append(f"[{cur}][v{k}]overlay=x={x}:y={y}:eof_action=pass:format=auto[o{k}]")
                 cur = f"o{k}"
                 k += 1
@@ -376,7 +404,7 @@ def build_chunk(
         voice, music = [], []
         for j, seg in enumerate(s for s in chunk.segments if s.audio):
             stream = getattr(assets[seg.clip.asset_id], "audio_stream", 0)
-            graph.append(f"[{seg.input_index}:a:{stream}]{_audio_chain(seg, t0)}[a{j}]")
+            graph.append(f"[{seg.audio_input}:a:{stream}]{_audio_chain(seg, t0)}[a{j}]")
             (music if seg.track.duck else voice).append(f"[a{j}]")
 
         def bus(labels: list[str], name: str) -> str:
