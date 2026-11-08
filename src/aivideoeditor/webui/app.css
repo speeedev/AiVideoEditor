@@ -151,3 +151,7 @@ h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing
 .project-item b { font-size: 14px; }
 .project-item .muted { font-size: 11px; }
 @media (max-width: 720px) { .launcher-grid { grid-template-columns: 1fr; } }
+.asset[draggable="true"] { cursor: grab; }
+.tl-empty { margin: 30px 0 0 90px; padding: 28px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted);
+  text-align: center; }
+.tl-scroll.drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; background: #172033; }

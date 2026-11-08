@@ -11,6 +11,7 @@ let stillTimer = null;
 let refreshTimer = null;
 let userZoomed = false;
 
+const ASSET_MIME = "application/x-ave-asset";
 const ROLE_TR = { screen: "ekran", camera: "kamera", mic: "mikrofon", music: "müzik", broll: "b-roll", sfx: "efekt", other: "diğer", overlay: "bindirme" };
 
 // ------------------------------------------------------------------ helpers --
@@ -127,6 +128,12 @@ function renderAssets() {
   if (!S.assets.length) box.appendChild(el("div", "muted small", "Henüz kayıt yok."));
   for (const a of S.assets) {
     const item = el("div", "asset");
+    item.draggable = true;
+    item.title = "Timeline'a sürükleyip bırakabilirsin";
+    item.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData(ASSET_MIME, a.id);
+      e.dataTransfer.effectAllowed = "copy";
+    });
     item.style.borderLeftColor = `var(--${["screen", "camera", "mic", "music", "broll"].includes(a.role) ? a.role : "other"})`;
     item.appendChild(el("div", "name", a.name));
     const meta = a.is_image ? ["resim", `${a.width}×${a.height}`] : [tc(a.duration)];
@@ -230,8 +237,12 @@ function renderTimeline() {
   tracks.innerHTML = "";
   const video = tl.tracks.filter((t) => t.kind === "video").reverse();  // top layer first
   const audio = tl.tracks.filter((t) => t.kind === "audio");
+  if (!tl.tracks.length) {
+    tracks.appendChild(el("div", "tl-empty", "Kaydı soldan buraya sürükle ya da üstteki “Timeline kur”a bas"));
+  }
   for (const t of [...video, ...audio]) {
     const row = el("div", "track");
+    row.dataset.trackId = t.id;
     const label = el("div", "label");
     label.innerHTML = `<b>${t.id}</b> ${ROLE_TR[t.role] || t.role || ""}<br>` +
       [t.muted && "sessiz", t.hidden && "gizli", t.locked && "kilitli", t.duck && "duck",
@@ -537,6 +548,28 @@ function wire() {
   $("tlZoom").oninput = () => { pps = +$("tlZoom").value; userZoomed = true; renderTimeline(); };
   $("tlFit").onclick = () => { userZoomed = false; renderTimeline(); };
   $("send").onclick = send;
+  // Drag a recording from the list onto the timeline.
+  const tlArea = $("tlScroll");
+  tlArea.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer.types.includes(ASSET_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    tlArea.classList.add("drop-target");
+  });
+  tlArea.addEventListener("dragleave", (e) => {
+    if (!tlArea.contains(e.relatedTarget)) tlArea.classList.remove("drop-target");
+  });
+  tlArea.addEventListener("drop", guard(async (e) => {
+    tlArea.classList.remove("drop-target");
+    const id = e.dataTransfer.getData(ASSET_MIME);
+    if (!id) return;
+    e.preventDefault();
+    const inner = $("tlInner").getBoundingClientRect();
+    const start = S.timeline.tracks.length ? Math.max(0, (e.clientX - inner.left - LABEL_W) / pps) : 0;
+    const row = e.target.closest ? e.target.closest(".track") : null;
+    const r = await api("/api/timeline/add", { asset_id: id, start, track_id: row ? row.dataset.trackId : null });
+    status(r.result);
+  }));
   $("btnProjects").onclick = guard(async () => { await api("/api/projects/close", {}); await refresh(); });
   $("btnSave").onclick = guard(async () => {
     const r = await api("/api/save", {});

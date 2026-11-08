@@ -368,6 +368,23 @@ class App:
             raise ValueError(text)
         return {"result": text}
 
+    def drop_asset(self, asset_id: str, start: float, track_id: str | None) -> dict:
+        """A recording dragged from the asset list onto the timeline."""
+        from .analysis.frames import format_tc
+        from .timeline.assemble import add_asset_to_timeline
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
+        with self.lock:
+            self.session.checkpoint("add to timeline")
+            try:
+                clip = add_asset_to_timeline(self.project, self.session.timeline, asset_id, start, track_id)
+                self.session.commit()
+            except Exception:
+                self.session.rollback()
+                raise
+        self.bus.publish({"type": "state"})
+        return {"clip": clip.id, "result": f"{asset_id} → {format_tc(clip.start)}–{format_tc(clip.end)}"}
+
     def conversation(self) -> list[dict]:
         """Chat history (text only) for the panel."""
         f = self.project.root / "agent" / "conversation.json"
@@ -608,6 +625,9 @@ def make_handler(app: App):
                         ok = app.session.undo() if path == "/api/undo" else app.session.redo()
                     app.bus.publish({"type": "state"})
                     return self._json({"ok": ok})
+                if path == "/api/timeline/add":
+                    return self._json(app.drop_asset(body.get("asset_id", ""), float(body.get("start") or 0.0),
+                                                     body.get("track_id") or None))
                 if path == "/api/edit":
                     return self._json(app.edit(body.get("tool", ""), body.get("args") or {}))
                 if path == "/api/export":

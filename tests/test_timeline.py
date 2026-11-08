@@ -200,3 +200,27 @@ def test_guess_role():
     assert guess_role("rode.wav", audio) == "mic"
     assert guess_role("bgm.mp3", audio) == "music"
     assert guess_role("logo.png", image) == "other"
+
+
+def test_add_asset_to_timeline(session, demo_media, tmp_path):
+    from PIL import Image
+    from aivideoeditor.timeline import Timeline
+    from aivideoeditor.timeline.assemble import add_asset_to_timeline
+    p = session.project
+    tl = Timeline(canvas=p.data.canvas.model_copy())
+    s = add_asset_to_timeline(p, tl, "screen")
+    assert tl.track(tl.video_tracks[0].id).role == "screen" and s.start == 0 and s.volume == 1.0
+    m = add_asset_to_timeline(p, tl, "mic", 0.0)
+    assert tl.audio_tracks[0].role == "mic"
+    c = add_asset_to_timeline(p, tl, "camera", 1.3)
+    assert c.transform.w < 0.5          # picture-in-picture over the screen recording
+    assert c.volume == 0.0              # the external mic carries the sound
+    again = add_asset_to_timeline(p, tl, "screen", 30.0)
+    assert len([t for t in tl.video_tracks if t.role == "screen"]) == 1 and again.start == 30.0
+    img = tmp_path / "slide.png"
+    Image.new("RGB", (160, 90), (0, 128, 255)).save(img)
+    p.add_asset(img, "auto", "slide")
+    ov = add_asset_to_timeline(p, tl, "slide", 2.0)
+    assert ov.duration == 5.0 and tl.find_clip(ov.id)[0].role == "overlay"
+    assert validate(tl, {a.id: a.duration for a in p.assets.values()}) == []
+    assert m.end > 0
