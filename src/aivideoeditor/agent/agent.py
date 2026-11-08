@@ -141,11 +141,14 @@ class AgentContext:
 
 
 def _block_to_dict(block: Any) -> dict[str, Any]:
+    """Serialise a response content block for the history (unchanged apart from null optionals)."""
     if isinstance(block, dict):
         return block
     if hasattr(block, "to_dict"):
-        return block.to_dict(mode="json")
-    return block.model_dump(mode="json", exclude_none=True)
+        d = block.to_dict(mode="json")
+    else:
+        d = block.model_dump(mode="json")
+    return {k: v for k, v in d.items() if v is not None}
 
 
 class EditAgent:
