@@ -17,7 +17,6 @@ from .timeline.ops import EditError, validate
 class EditorSession:
     def __init__(self, project: Project):
         self.project = project
-        self._undo: list[str] = []
         self._redo: list[str] = []
 
     # -- state --------------------------------------------------------------
@@ -32,30 +31,41 @@ class EditorSession:
     def primary_audio(self) -> str | None:
         return primary_audio_asset(self.project)
 
-    def checkpoint(self) -> None:
-        self._undo.append(self.timeline.model_dump_json())
+    def checkpoint(self, label: str = "") -> None:
+        """Save the current timeline so the next change can be undone (also across runs)."""
+        self.project.snapshot(label)
         self._redo.clear()
-        if len(self._undo) > 200:
-            self._undo.pop(0)
+
+    def _pop_snapshot(self) -> Timeline | None:
+        hist = self.project.history()
+        if not hist:
+            return None
+        last = hist[-1]
+        tl = Timeline.model_validate_json(last.read_text(encoding="utf-8"))
+        last.unlink()
+        return tl
 
     def rollback(self) -> None:
         """Discard changes made since the last checkpoint (used after a failed edit)."""
-        if self._undo:
-            self.project.timeline = Timeline.model_validate_json(self._undo.pop())
+        tl = self._pop_snapshot()
+        if tl is not None:
+            self.project.timeline = tl
 
     def undo(self) -> bool:
-        if not self._undo:
+        tl = self._pop_snapshot()
+        if tl is None:
             return False
         self._redo.append(self.timeline.model_dump_json())
-        self.project.timeline = Timeline.model_validate_json(self._undo.pop())
+        self.project.timeline = tl
         self.project.save()
         return True
 
     def redo(self) -> bool:
         if not self._redo:
             return False
-        self._undo.append(self.timeline.model_dump_json())
-        self.project.timeline = Timeline.model_validate_json(self._redo.pop())
+        data = self._redo.pop()
+        self.project.snapshot("redo")
+        self.project.timeline = Timeline.model_validate_json(data)
         self.project.save()
         return True
 
@@ -66,7 +76,7 @@ class EditorSession:
         self.project.save()
 
     def assemble(self, layout: str | None = None) -> Timeline:
-        self.checkpoint()
+        self.checkpoint("assemble")
         self.project.timeline = assemble(self.project, layout=layout)
         self.commit()
         return self.timeline

@@ -1,0 +1,783 @@
+"""The editing tools Claude uses, with validated inputs and readable results."""
+
+from __future__ import annotations
+
+import base64
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, ValidationError
+
+from ..analysis.frames import format_tc
+from ..analysis.transcribe import Word
+from ..timeline import layouts, ops
+from ..timeline.autocut import filler_ranges, pause_ranges, repeated_phrases
+from ..timeline.describe import describe_timeline, format_words
+from ..timeline.mapping import TimelineWord, asset_clips, silences_on_timeline, snap_to_pauses
+from ..timeline.model import Rect, Transform
+from ..timeline.ops import EditError
+from .schema import tool_schema
+
+ToolOutput = str | list[dict[str, Any]]
+
+
+@dataclass
+class ToolSpec:
+    name: str
+    description: str
+    model: type[BaseModel]
+    handler: Callable[[Any, Any], ToolOutput]
+    mutates: bool
+
+    def definition(self, *, eager: bool = True) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": tool_schema(self.model),
+        }
+        if eager:
+            d["eager_input_streaming"] = True
+        return d
+
+
+REGISTRY: dict[str, ToolSpec] = {}
+
+
+def tool(name: str, model: type[BaseModel], *, mutates: bool = False):
+    def deco(fn: Callable[[Any, Any], ToolOutput]):
+        doc = (fn.__doc__ or "").strip()
+        REGISTRY[name] = ToolSpec(name, " ".join(line.strip() for line in doc.splitlines()), model, fn, mutates)
+        return fn
+    return deco
+
+
+def image_block(path: Path) -> dict[str, Any]:
+    data = base64.standard_b64encode(Path(path).read_bytes()).decode("ascii")
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
+
+
+# ------------------------------------------------------------ input models --
+
+class Empty(BaseModel):
+    pass
+
+
+class RangeIn(BaseModel):
+    start: float = Field(description="Range start in seconds")
+    end: float = Field(description="Range end in seconds")
+
+
+class RectIn(BaseModel):
+    x: float = Field(ge=0, le=1, description="Left edge, 0..1 of source width")
+    y: float = Field(ge=0, le=1, description="Top edge, 0..1 of source height")
+    w: float = Field(gt=0, le=1, description="Width, 0..1 of source width")
+    h: float = Field(gt=0, le=1, description="Height, 0..1 of source height")
+
+
+class GetTimelineIn(BaseModel):
+    start: float | None = Field(None, description="Only show clips after this timeline time")
+    end: float | None = Field(None, description="Only show clips before this timeline time")
+
+
+class GetTranscriptIn(BaseModel):
+    start: float | None = Field(None, description="Range start (seconds, in the chosen timebase)")
+    end: float | None = Field(None, description="Range end (seconds, in the chosen timebase)")
+    mode: Literal["phrases", "words"] = Field(
+        "phrases", description="'phrases' for reading; 'words' gives every word's start time for precise cuts")
+    asset_id: str | None = Field(None, description="Asset whose speech to show (default: primary audio)")
+    timebase: Literal["timeline", "source"] = Field(
+        "timeline", description="'timeline' = current edit (cut material is absent); "
+                                "'source' = raw recording times, including material already cut")
+
+
+class FindCandidatesIn(BaseModel):
+    kind: Literal["pauses", "fillers", "retakes"]
+    asset_id: str | None = Field(None, description="Asset to analyse (default: primary audio)")
+    min_pause: float = Field(0.7, description="pauses: only pauses longer than this (s)")
+    keep: float = Field(0.2, description="pauses: silence to keep on each side of a shortened pause (s)")
+
+
+class ViewTimelineIn(BaseModel):
+    times: list[float] = Field(min_length=1, max_length=12, description="Timeline times to look at")
+    detail: Literal["overview", "detail"] = Field(
+        "overview", description="'overview': small tiles (up to 12); 'detail': large frames (up to 4)")
+
+
+class ViewSourceIn(BaseModel):
+    asset_id: str
+    times: list[float] = Field(min_length=1, max_length=12, description="Times inside the source file")
+    detail: Literal["overview", "detail"] = "overview"
+
+
+class VisualActivityIn(BaseModel):
+    asset_id: str | None = Field(None, description="Video asset (default: the screen recording)")
+    start: float | None = None
+    end: float | None = None
+
+
+class RippleDeleteIn(BaseModel):
+    ranges: list[RangeIn] = Field(min_length=1, description="Timeline ranges to remove, all relative to the "
+                                                            "current timeline (they are applied together)")
+    snap_to_pauses: bool = Field(True, description="Move range edges into the nearest pause (±0.25 s) so "
+                                                   "words are not clipped")
+    tracks: list[str] | None = Field(None, description="Limit to these track ids (default: all unlocked "
+                                                       "tracks, which keeps everything in sync)")
+
+
+class LiftIn(BaseModel):
+    start: float
+    end: float
+    tracks: list[str] = Field(min_length=1, description="Track ids to clear (the gap stays)")
+
+
+class SplitIn(BaseModel):
+    time: float
+    tracks: list[str] | None = None
+
+
+class PlaceClipIn(BaseModel):
+    track_id: str
+    asset_id: str
+    source_in: float = Field(description="Start inside the asset (s)")
+    source_out: float = Field(description="End inside the asset (s)")
+    start: float = Field(description="Timeline position (s)")
+    mode: Literal["overwrite", "insert"] = Field(
+        "overwrite", description="'insert' pushes later material on all unlocked tracks to make room")
+    volume: float = Field(1.0, ge=0, le=4)
+    speed: float = Field(1.0, gt=0.05, le=16)
+
+
+class AddTrackIn(BaseModel):
+    kind: Literal["video", "audio"]
+    name: str = ""
+    role: str | None = Field(None, description="screen, camera, mic, music, broll, sfx or other")
+
+
+class SetTrackIn(BaseModel):
+    track_id: str
+    name: str | None = None
+    muted: bool | None = None
+    hidden: bool | None = None
+    locked: bool | None = Field(None, description="Locked tracks are not affected by ripple edits")
+    duck: bool | None = Field(None, description="Audio: automatically lower this track under speech")
+    volume: float | None = Field(None, ge=0, le=4)
+
+
+class MoveClipIn(BaseModel):
+    clip_id: str
+    start: float
+    track_id: str | None = None
+    overwrite: bool = False
+
+
+class TrimClipIn(BaseModel):
+    clip_id: str
+    start: float | None = Field(None, description="New timeline start of the clip")
+    end: float | None = Field(None, description="New timeline end of the clip")
+
+
+class DeleteClipsIn(BaseModel):
+    clip_ids: list[str] = Field(min_length=1)
+    ripple: bool = False
+
+
+class SetClipsIn(BaseModel):
+    clip_ids: list[str] = Field(min_length=1)
+    volume: float | None = Field(None, ge=0, le=4)
+    fade_in: float | None = Field(None, ge=0, le=10)
+    fade_out: float | None = Field(None, ge=0, le=10)
+    visible: bool | None = None
+    opacity: float | None = Field(None, ge=0, le=1)
+    fit: Literal["contain", "cover", "stretch"] | None = None
+    box: RectIn | None = Field(None, description="Where the clip is drawn on the canvas (0..1)")
+
+
+class ApplyLayoutIn(BaseModel):
+    start: float
+    end: float
+    layout: Literal["screen_only", "camera_only", "pip", "side_by_side", "stack"]
+    pip_corner: Literal["bottom_right", "bottom_left", "top_right", "top_left"] = "bottom_right"
+    pip_size: float = Field(0.26, ge=0.05, le=0.6, description="PiP width as a fraction of the canvas width")
+    split: float | None = Field(None, ge=0.25, le=0.85, description="side_by_side / stack divider position")
+
+
+class ZoomIn(BaseModel):
+    start: float
+    end: float
+    region: RectIn | None = Field(description="Region of the source frame to fill the box with; null resets")
+    track_id: str | None = Field(None, description="Video track (default: the screen track)")
+
+
+class SpeedUpIn(BaseModel):
+    start: float
+    end: float
+    factor: float = Field(gt=0.1, le=16, description="2 = twice as fast")
+    mute: bool = Field(True, description="Silence audio in the sped-up part")
+
+
+class AddMusicIn(BaseModel):
+    asset_id: str
+    start: float = 0.0
+    end: float | None = Field(None, description="Timeline end (default: end of the edit)")
+    source_in: float = 0.0
+    volume: float = Field(0.15, ge=0, le=2)
+    duck: bool = True
+    fade_in: float = Field(1.0, ge=0)
+    fade_out: float = Field(2.5, ge=0)
+
+
+class AddTextIn(BaseModel):
+    start: float
+    end: float
+    text: str = Field(min_length=1)
+    position: Literal["top", "center", "bottom", "lower_third"] = "top"
+    x: float | None = Field(None, ge=0, le=1, description="Custom centre x (overrides position)")
+    y: float | None = Field(None, ge=0, le=1, description="Custom centre y (overrides position)")
+    size: float = Field(0.06, gt=0.01, le=0.3, description="Font size as a fraction of canvas height")
+    color: str = "white"
+    box: bool = True
+
+
+class UpdateTextIn(BaseModel):
+    text_id: str
+    start: float | None = None
+    end: float | None = None
+    text: str | None = None
+    x: float | None = Field(None, ge=0, le=1)
+    y: float | None = Field(None, ge=0, le=1)
+    size: float | None = Field(None, gt=0.01, le=0.3)
+    color: str | None = None
+    box: bool | None = None
+
+
+class RemoveTextIn(BaseModel):
+    text_id: str
+
+
+class SetCaptionsIn(BaseModel):
+    enabled: bool
+    source_asset: str | None = None
+    max_words: int | None = Field(None, ge=1, le=20)
+    highlight_words: bool | None = None
+    uppercase: bool | None = None
+    size: float | None = Field(None, gt=0.01, le=0.2)
+    y: float | None = Field(None, ge=0.1, le=1.0)
+
+
+class AddMarkerIn(BaseModel):
+    time: float
+    note: str
+
+
+class UndoIn(BaseModel):
+    steps: int = Field(1, ge=1, le=20)
+
+
+class RenderPreviewIn(BaseModel):
+    frames: int = Field(8, ge=0, le=12, description="Evenly spaced frames from the rendered file to look at")
+
+
+class AssembleIn(BaseModel):
+    layout: Literal["screen_only", "camera_only", "pip", "side_by_side", "stack"] | None = None
+
+
+# ----------------------------------------------------------------- helpers --
+
+def _primary(ctx, asset_id: str | None) -> str:
+    aid = asset_id or ctx.session.primary_audio()
+    if aid is None:
+        raise EditError("there is no recording with audio in this project")
+    ctx.session.project.asset(aid)
+    return aid
+
+
+def _track_for_role(ctx, role: str) -> str:
+    for t in ctx.session.timeline.video_tracks:
+        if t.role == role:
+            return t.id
+    raise EditError(f"no video track with role '{role}'")
+
+
+def _words_in(words: list[TimelineWord], start: float | None, end: float | None) -> list[TimelineWord]:
+    return [w for w in words if (start is None or w.end > start) and (end is None or w.start < end)]
+
+
+def _source_words(words: list[Word], asset_id: str, start: float | None, end: float | None) -> list[TimelineWord]:
+    out = []
+    for w in words:
+        if (start is None or w.end > start) and (end is None or w.start < end):
+            out.append(TimelineWord(w.start, w.end, w.text, w.prob, asset_id, w.start, w.end))
+    return out
+
+
+def _pauses(ctx) -> list[tuple[float, float]]:
+    aid = ctx.session.primary_audio()
+    if aid is None:
+        return []
+    sp = ctx.session.project.speech(aid)
+    return silences_on_timeline(ctx.session.timeline, aid, sp) if sp else []
+
+
+def _duration_line(ctx) -> str:
+    return f"Timeline is now {format_tc(ctx.session.timeline.duration)} ({ctx.session.timeline.duration:.2f}s)."
+
+
+def _source_aspect(ctx, track_id: str) -> float:
+    track = ctx.session.timeline.track(track_id)
+    for c in track.clips:
+        info = ctx.session.project.asset(c.asset_id).info
+        if info.get("width") and info.get("height"):
+            return info["width"] / info["height"]
+    return 16 / 9
+
+
+# ------------------------------------------------------------ inspection --
+
+@tool("get_project_overview", Empty)
+def get_project_overview(ctx, args: Empty) -> ToolOutput:
+    """Assets (role, length, resolution, sync offset) and which analysis (transcript, pauses, visual activity)
+    is available."""
+    return ctx.overview()
+
+
+@tool("get_timeline", GetTimelineIn)
+def get_timeline(ctx, args: GetTimelineIn) -> ToolOutput:
+    """Tracks and clips of the current edit with ids, timeline/source times, volumes, layout boxes and zooms.
+    Use a range for long timelines."""
+    return describe_timeline(ctx.session.timeline, start=args.start, end=args.end)
+
+
+@tool("get_transcript", GetTranscriptIn)
+def get_transcript(ctx, args: GetTranscriptIn) -> ToolOutput:
+    """What is said and when. In the timeline timebase the times are positions in the current edit, already
+    accounting for every cut; '✂' marks a cut, '(pause Xs)' a silence, '?' a low-confidence word."""
+    aid = _primary(ctx, args.asset_id)
+    proj = ctx.session.project
+    tr = proj.transcript(aid)
+    if tr is None:
+        return (f"No transcript for '{aid}'. Run `ave analyze` with transcription, or rely on pauses "
+                f"(find_edit_candidates kind=pauses) and visuals.")
+    if args.timebase == "source":
+        words = _source_words(list(tr.words()), aid, args.start, args.end)
+    else:
+        words = _words_in(ctx.session.words(aid), args.start, args.end)
+    header = f"Transcript of {aid} ({args.timebase} time, language {tr.language or '?'}):\n"
+    text = format_words(words, mode=args.mode)
+    if len(text) > 60000:
+        text = text[:60000] + "\n… (truncated: request a narrower range)"
+    return header + text
+
+
+@tool("find_edit_candidates", FindCandidatesIn)
+def find_edit_candidates(ctx, args: FindCandidatesIn) -> ToolOutput:
+    """Proposes ranges to cut (nothing is changed): long pauses, filler words (um/uh, eee/ıı) or repeated
+    phrases that suggest a retake. Review them, then pass the ones you agree with to ripple_delete."""
+    aid = _primary(ctx, args.asset_id)
+    proj = ctx.session.project
+    tl = ctx.session.timeline
+    if args.kind == "pauses":
+        sp = proj.speech(aid)
+        if sp is None:
+            return f"No pause analysis for '{aid}' (run `ave analyze`)."
+        ranges = pause_ranges(tl, aid, sp, min_pause=args.min_pause, keep=args.keep)
+        total = sum(b - a for a, b in ranges)
+        lines = [f"{len(ranges)} pauses longer than {args.min_pause}s would be shortened, saving {total:.1f}s:"]
+        lines += [f"  [{a:.2f}, {b:.2f}]  ({b - a:.2f}s)" for a, b in ranges[:400]]
+        return "\n".join(lines)
+    tr = proj.transcript(aid)
+    if tr is None:
+        return f"No transcript for '{aid}', so {args.kind} cannot be detected."
+    if args.kind == "fillers":
+        found = filler_ranges(tl, aid, tr)
+        if not found:
+            return "No filler words found in the transcript (Whisper may have omitted them; check pauses too)."
+        return "Filler words:\n" + "\n".join(f"  [{a:.2f}, {b:.2f}] {w!r}" for a, b, w in found[:400])
+    found = repeated_phrases(tl, aid, tr)
+    if not found:
+        return "No obvious repeated phrases (retakes) found."
+    lines = ["Possible retakes (an earlier take followed by a restart of the same words):"]
+    for f in found[:100]:
+        a, b = f["first_take"]
+        lines.append(f"  first take [{a:.2f}, {b:.2f}] restart at {f['retake_starts']:.2f}: {f['phrase']!r}")
+    lines.append("Read the transcript around each one before cutting: keep the best (usually the last) take.")
+    return "\n".join(lines)
+
+
+@tool("view_timeline", ViewTimelineIn)
+def view_timeline(ctx, args: ViewTimelineIn) -> ToolOutput:
+    """Look at the composited output (layouts, zooms, texts, captions) at the given timeline times."""
+    tl = ctx.session.timeline
+    times = [min(max(t, 0.0), max(tl.duration - 1e-3, 0.0)) for t in args.times]
+    if args.detail == "detail":
+        times = times[:4]
+        sheet = ctx.session.timeline_sheet(times, thumb_width=768, columns=2)
+    else:
+        sheet = ctx.session.timeline_sheet(times, thumb_width=384, columns=4)
+    return [{"type": "text", "text": f"Timeline frames at {', '.join(format_tc(t) for t in times)}:"},
+            image_block(sheet)]
+
+
+@tool("view_source", ViewSourceIn)
+def view_source(ctx, args: ViewSourceIn) -> ToolOutput:
+    """Look at frames of a raw video asset at source times (e.g. to find what is on screen, or a region
+    to zoom into)."""
+    asset = ctx.session.project.asset(args.asset_id)
+    times = [min(max(t, 0.0), max(asset.duration - 0.05, 0.0)) for t in args.times]
+    if args.detail == "detail":
+        times = times[:4]
+        sheet = ctx.session.source_sheet(args.asset_id, times, thumb_width=768, columns=2)
+    else:
+        sheet = ctx.session.source_sheet(args.asset_id, times, thumb_width=384, columns=4)
+    w, h = asset.info.get("width"), asset.info.get("height")
+    return [{"type": "text", "text": f"{args.asset_id} ({w}x{h}) source frames at "
+                                     f"{', '.join(format_tc(t) for t in times)}:"},
+            image_block(sheet)]
+
+
+@tool("get_visual_activity", VisualActivityIn)
+def get_visual_activity(ctx, args: VisualActivityIn) -> ToolOutput:
+    """When something changes on screen (typing, scrolling, windows) and where hard cuts are, mapped onto the
+    timeline. Idle stretches are candidates for speed_up; busy ones may need a zoom."""
+    proj = ctx.session.project
+    aid = args.asset_id
+    if aid is None:
+        aid = next((a.id for a in proj.assets.values() if a.role == "screen"), None) or \
+              next((a.id for a in proj.assets.values() if a.has_video), None)
+    if aid is None:
+        return "No video assets."
+    vis = proj.visual(aid)
+    if vis is None:
+        return f"No visual analysis for '{aid}' (run `ave analyze`)."
+    tl = ctx.session.timeline
+    lo = args.start if args.start is not None else 0.0
+    hi = args.end if args.end is not None else tl.duration
+    active: list[tuple[float, float]] = []
+    cuts: list[float] = []
+    for _, c in asset_clips(tl, aid):
+        for a, b in vis.active:
+            s0, s1 = max(a, c.source_in), min(b, c.source_out)
+            if s1 > s0:
+                active.append((c.timeline_time(s0), c.timeline_time(s1)))
+        for t in vis.scene_cuts:
+            if c.source_in <= t < c.source_out:
+                cuts.append(c.timeline_time(t))
+    active = sorted((max(a, lo), min(b, hi)) for a, b in active if b > lo and a < hi)
+    idle: list[tuple[float, float]] = []
+    cur = lo
+    for a, b in active:
+        if a - cur >= 3.0:
+            idle.append((cur, a))
+        cur = max(cur, b)
+    if hi - cur >= 3.0:
+        idle.append((cur, hi))
+    lines = [f"Visual activity of {aid} on the timeline {format_tc(lo)}–{format_tc(hi)}:",
+             "Active (screen changing): " + (", ".join(f"{a:.1f}–{b:.1f}" for a, b in active[:200]) or "none"),
+             "Idle ≥3s (static screen): " + (", ".join(f"{a:.1f}–{b:.1f}" for a, b in idle[:200]) or "none"),
+             "Hard cuts / big changes: " + (", ".join(f"{t:.2f}" for t in sorted(cuts) if lo <= t <= hi) or "none")]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- editing --
+
+@tool("ripple_delete", RippleDeleteIn, mutates=True)
+def ripple_delete(ctx, args: RippleDeleteIn) -> ToolOutput:
+    """Remove time ranges from the edit and close the gaps, on all unlocked tracks at once so camera, screen
+    and microphone stay in sync. This is the main cutting tool (dead air, mistakes, retakes, off-topic parts).
+    Give all ranges in current timeline time in one call."""
+    tl = ctx.session.timeline
+    ranges = [(r.start, r.end) for r in args.ranges]
+    notes: list[str] = []
+    if args.snap_to_pauses:
+        pauses = _pauses(ctx)
+        snapped = []
+        for a, b in ranges:
+            a2 = snap_to_pauses(a, pauses) if a > 0 else a
+            b2 = snap_to_pauses(b, pauses) if b < tl.duration else b
+            if b2 - a2 < 0.02:
+                a2, b2 = a, b
+            if abs(a2 - a) > 1e-3 or abs(b2 - b) > 1e-3:
+                notes.append(f"[{a:.2f}, {b:.2f}] snapped to [{a2:.2f}, {b2:.2f}]")
+            snapped.append((a2, b2))
+        ranges = snapped
+    words = ctx.session.words() if ctx.session.primary_audio() else []
+    for a, b in ranges:
+        for w in words:
+            for edge in (a, b):
+                if w.start + 0.03 < edge < w.end - 0.03:
+                    notes.append(f"warning: edge {edge:.2f} cuts into the word {w.text!r} ({w.start:.2f}–{w.end:.2f})")
+    before = tl.duration
+    removed = ops.ripple_delete(tl, ranges, args.tracks)
+    msg = [f"Removed {removed:.2f}s in {len(ranges)} range(s) ({format_tc(before)} → {format_tc(tl.duration)})."]
+    return "\n".join(msg + notes[:40])
+
+
+@tool("lift", LiftIn, mutates=True)
+def lift(ctx, args: LiftIn) -> ToolOutput:
+    """Clear a time range on specific tracks without closing the gap (e.g. remove b-roll, leave a hole)."""
+    ops.lift(ctx.session.timeline, args.start, args.end, args.tracks)
+    return f"Cleared {args.start:.2f}–{args.end:.2f} on {', '.join(args.tracks)}."
+
+
+@tool("split", SplitIn, mutates=True)
+def split(ctx, args: SplitIn) -> ToolOutput:
+    """Split clips at a timeline time (all unlocked tracks by default)."""
+    ids = ops.split_at(ctx.session.timeline, args.time, args.tracks)
+    return f"Split at {args.time:.2f}; new clips: {', '.join(ids) or 'none (nothing spans that time)'}."
+
+
+@tool("place_clip", PlaceClipIn, mutates=True)
+def place_clip(ctx, args: PlaceClipIn) -> ToolOutput:
+    """Put a piece of an asset on a track (b-roll, an extra take, restoring cut material from the source)."""
+    proj = ctx.session.project
+    asset = proj.asset(args.asset_id)
+    track = ctx.session.timeline.track(args.track_id)
+    if track.kind == "video" and not asset.has_video:
+        raise EditError(f"{args.asset_id} has no video; put it on an audio track")
+    if args.source_out > asset.duration + 0.05:
+        raise EditError(f"source_out {args.source_out:.2f} is past the end of {args.asset_id} ({asset.duration:.2f}s)")
+    clip = ops.place_clip(ctx.session.timeline, args.track_id, args.asset_id, args.source_in, args.source_out,
+                          args.start, speed=args.speed, volume=args.volume, mode=args.mode, label=args.asset_id)
+    return f"Placed {clip.id} on {args.track_id} at {format_tc(clip.start)}–{format_tc(clip.end)}. " + _duration_line(ctx)
+
+
+@tool("add_track", AddTrackIn, mutates=True)
+def add_track(ctx, args: AddTrackIn) -> ToolOutput:
+    """Add an empty video or audio track (new video tracks go on top)."""
+    t = ops.add_track(ctx.session.timeline, args.kind, args.name, args.role)
+    return f"Added track {t.id} ({t.kind}, role {t.role})."
+
+
+@tool("set_track", SetTrackIn, mutates=True)
+def set_track(ctx, args: SetTrackIn) -> ToolOutput:
+    """Change track properties: mute, hide, lock (exclude from ripple edits), duck under speech, volume, name."""
+    props = args.model_dump(exclude={"track_id"})
+    t = ops.set_track(ctx.session.timeline, args.track_id, **props)
+    return f"Track {t.id}: muted={t.muted} hidden={t.hidden} locked={t.locked} duck={t.duck} volume={t.volume}."
+
+
+@tool("move_clip", MoveClipIn, mutates=True)
+def move_clip(ctx, args: MoveClipIn) -> ToolOutput:
+    """Move a clip to another time and/or track of the same kind."""
+    c = ops.move_clip(ctx.session.timeline, args.clip_id, args.start, args.track_id, overwrite=args.overwrite)
+    return f"Moved {c.id} to {format_tc(c.start)}–{format_tc(c.end)}."
+
+
+@tool("trim_clip", TrimClipIn, mutates=True)
+def trim_clip(ctx, args: TrimClipIn) -> ToolOutput:
+    """Move one clip's start/end edges (timeline time) without shifting its content or other clips."""
+    c = ops.trim_clip(ctx.session.timeline, args.clip_id, start=args.start, end=args.end)
+    return f"{c.id} now {format_tc(c.start)}–{format_tc(c.end)} (source {c.source_in:.2f}–{c.source_out:.2f})."
+
+
+@tool("delete_clips", DeleteClipsIn, mutates=True)
+def delete_clips(ctx, args: DeleteClipsIn) -> ToolOutput:
+    """Delete clips by id; with ripple=true the gap is closed on all unlocked tracks."""
+    ops.delete_clips(ctx.session.timeline, args.clip_ids, ripple=args.ripple)
+    return f"Deleted {', '.join(args.clip_ids)}. " + _duration_line(ctx)
+
+
+@tool("set_clip_properties", SetClipsIn, mutates=True)
+def set_clip_properties(ctx, args: SetClipsIn) -> ToolOutput:
+    """Volume, fades, visibility, opacity, fit mode or canvas box of clips."""
+    tl = ctx.session.timeline
+    props: dict[str, Any] = {k: getattr(args, k) for k in ("volume", "fade_in", "fade_out", "visible")}
+    clips = ops.set_clips(tl, args.clip_ids, **props)
+    for c in clips:
+        tr = c.transform.model_dump()
+        if args.opacity is not None:
+            tr["opacity"] = args.opacity
+        if args.fit is not None:
+            tr["fit"] = args.fit
+        if args.box is not None:
+            tr.update(x=args.box.x, y=args.box.y, w=args.box.w, h=args.box.h)
+        c.transform = Transform.model_validate(tr)
+    return f"Updated {', '.join(c.id for c in clips)}."
+
+
+@tool("apply_layout", ApplyLayoutIn, mutates=True)
+def apply_layout(ctx, args: ApplyLayoutIn) -> ToolOutput:
+    """Arrange screen and camera for a time range: screen_only, camera_only, pip (camera in a corner over the
+    screen), side_by_side, or stack (screen above camera, for vertical videos)."""
+    from ..timeline.assemble import camera_aspect
+    ids = layouts.apply_layout(ctx.session.timeline, args.start, args.end, args.layout,
+                               camera_aspect=camera_aspect(ctx.session.project), pip_corner=args.pip_corner,
+                               pip_size=args.pip_size, split=args.split)
+    return f"Layout {args.layout} applied to {format_tc(args.start)}–{format_tc(args.end)} ({len(ids)} clip pieces)."
+
+
+@tool("zoom", ZoomIn, mutates=True)
+def zoom(ctx, args: ZoomIn) -> ToolOutput:
+    """Punch in on a region of the source (normalised 0..1 of the source frame) for a time range, typically to
+    make small UI text readable on a screen recording. The region is widened to the box's aspect ratio.
+    region=null removes the zoom."""
+    track_id = args.track_id or _track_for_role(ctx, "screen")
+    if args.region is not None:
+        r = args.region
+        if r.x + r.w > 1.0001 or r.y + r.h > 1.0001:
+            raise EditError("region must lie inside the frame (x+w <= 1, y+h <= 1)")
+    region = Rect(**args.region.model_dump()) if args.region else None
+    ids = layouts.zoom_range(ctx.session.timeline, track_id, args.start, args.end, region,
+                             source_aspect=_source_aspect(ctx, track_id))
+    c = ctx.session.timeline.find_clip(ids[0])[1]
+    crop = c.transform.crop
+    detail = f" Effective region x{crop.x:.2f} y{crop.y:.2f} w{crop.w:.2f} h{crop.h:.2f}." if crop else ""
+    return f"Zoom {'set' if region else 'removed'} on {track_id} {format_tc(args.start)}–{format_tc(args.end)}.{detail}"
+
+
+@tool("speed_up", SpeedUpIn, mutates=True)
+def speed_up(ctx, args: SpeedUpIn) -> ToolOutput:
+    """Play a range faster on all unlocked tracks (e.g. long typing, installs, loading screens) and close up
+    the timeline. Audio is muted there by default."""
+    new = ops.speed_range(ctx.session.timeline, args.start, args.end, args.factor, mute=args.mute)
+    return (f"{format_tc(args.start)}–{format_tc(args.end)} now plays at {args.factor:g}x and lasts {new:.2f}s. "
+            + _duration_line(ctx))
+
+
+@tool("add_music", AddMusicIn, mutates=True)
+def add_music(ctx, args: AddMusicIn) -> ToolOutput:
+    """Add a music bed on a new locked audio track that ducks under speech, with fades."""
+    proj = ctx.session.project
+    tl = ctx.session.timeline
+    asset = proj.asset(args.asset_id)
+    if not asset.has_audio:
+        raise EditError(f"{args.asset_id} has no audio")
+    content_end = max((t.end for t in tl.tracks if t.role != "music"), default=tl.duration)
+    end = args.end if args.end is not None else content_end
+    if end <= args.start:
+        raise EditError("music end must be after start")
+    length = min(end - args.start, asset.duration - args.source_in)
+    if length <= 0:
+        raise EditError("source_in is past the end of the music file")
+    track = ops.add_track(tl, "audio", name=f"music: {args.asset_id}", role="music")
+    clip = ops.place_clip(tl, track.id, args.asset_id, args.source_in, args.source_in + length, args.start,
+                          volume=args.volume, label=args.asset_id)
+    clip.fade_in, clip.fade_out = args.fade_in, args.fade_out
+    track.locked = True
+    track.duck = args.duck
+    note = "" if length >= end - args.start - 0.05 else f" (music is shorter than requested: {length:.1f}s)"
+    return f"Music {args.asset_id} on {track.id} at {format_tc(clip.start)}–{format_tc(clip.end)}{note}."
+
+
+POSITIONS = {"top": (0.5, 0.1), "center": (0.5, 0.5), "bottom": (0.5, 0.82), "lower_third": (0.3, 0.78)}
+
+
+@tool("add_text", AddTextIn, mutates=True)
+def add_text(ctx, args: AddTextIn) -> ToolOutput:
+    """Add a title or text overlay (chapter titles, key points, names)."""
+    x, y = POSITIONS[args.position]
+    t = ops.add_text(ctx.session.timeline, args.start, args.end, args.text,
+                     x=args.x if args.x is not None else x, y=args.y if args.y is not None else y,
+                     size=args.size, color=args.color, box=args.box)
+    return f"Added text {t.id} {format_tc(t.start)}–{format_tc(t.end)}."
+
+
+@tool("update_text", UpdateTextIn, mutates=True)
+def update_text(ctx, args: UpdateTextIn) -> ToolOutput:
+    """Change a text overlay."""
+    t = ops.update_text(ctx.session.timeline, args.text_id, **args.model_dump(exclude={"text_id"}))
+    return f"Updated text {t.id}."
+
+
+@tool("remove_text", RemoveTextIn, mutates=True)
+def remove_text(ctx, args: RemoveTextIn) -> ToolOutput:
+    """Remove a text overlay."""
+    ops.remove_text(ctx.session.timeline, args.text_id)
+    return f"Removed text {args.text_id}."
+
+
+@tool("set_captions", SetCaptionsIn, mutates=True)
+def set_captions(ctx, args: SetCaptionsIn) -> ToolOutput:
+    """Turn burned-in captions (generated from the transcript, always in sync with the edit) on or off and
+    style them."""
+    props = args.model_dump()
+    if args.enabled and not props.get("source_asset"):
+        props["source_asset"] = ctx.session.timeline.captions.source_asset or ctx.session.primary_audio()
+    if args.enabled and props.get("source_asset") and ctx.session.project.transcript(props["source_asset"]) is None:
+        raise EditError(f"no transcript for '{props['source_asset']}', captions need one")
+    cap = ops.set_captions(ctx.session.timeline, **props)
+    return f"Captions {'on' if cap.enabled else 'off'} (source {cap.source_asset}, {cap.max_words} words/line)."
+
+
+@tool("add_marker", AddMarkerIn, mutates=True)
+def add_marker(ctx, args: AddMarkerIn) -> ToolOutput:
+    """Leave a note for the human editor at a timeline time (something to review, a missing asset, etc.)."""
+    m = ops.add_marker(ctx.session.timeline, args.time, args.note)
+    return f"Marker {m.id} at {format_tc(m.time)}."
+
+
+@tool("assemble_timeline", AssembleIn, mutates=True)
+def assemble_timeline(ctx, args: AssembleIn) -> ToolOutput:
+    """Rebuild the edit from scratch: every synced recording laid down in full at its sync position, with a
+    default layout. Discards the current edit (it can be undone)."""
+    from ..timeline.assemble import assemble
+    ctx.session.project.timeline = assemble(ctx.session.project, layout=args.layout)
+    return "Timeline rebuilt from the synced recordings.\n" + describe_timeline(ctx.session.timeline)
+
+
+@tool("undo", UndoIn)
+def undo(ctx, args: UndoIn) -> ToolOutput:
+    """Undo the last edit(s)."""
+    done = 0
+    for _ in range(args.steps):
+        if not ctx.session.undo():
+            break
+        done += 1
+    return f"Undid {done} edit(s). " + _duration_line(ctx)
+
+
+@tool("render_preview", RenderPreviewIn)
+def render_preview(ctx, args: RenderPreviewIn) -> ToolOutput:
+    """Render a low-resolution preview video of the whole edit for the human, and look at frames taken from
+    the rendered file. Slower than view_timeline; use it once the edit is in good shape."""
+    from ..analysis.frames import make_sheet, extract_frame
+    path = ctx.session.render(preview=True)
+    tl = ctx.session.timeline
+    out: list[dict[str, Any]] = [{"type": "text", "text": f"Preview rendered: {path} ({format_tc(tl.duration)})."}]
+    if args.frames:
+        n = args.frames
+        times = [tl.duration * (i + 0.5) / n for i in range(n)]
+        d = ctx.session.project.cache_dir("preview_frames")
+        frames = [extract_frame(path, t, d / f"{i:02d}.jpg", max_width=384) for i, t in enumerate(times)]
+        sheet = make_sheet(frames, [format_tc(t) for t in times], d / "sheet.jpg", columns=4)
+        out.append(image_block(sheet))
+    ctx.last_render = path
+    return out
+
+
+# ----------------------------------------------------------------- dispatch --
+
+def tool_definitions(*, eager: bool = True) -> list[dict[str, Any]]:
+    return [spec.definition(eager=eager) for spec in REGISTRY.values()]
+
+
+def run_tool(ctx, name: str, raw_input: Any) -> tuple[ToolOutput, bool]:
+    """Execute a tool. Returns (content, is_error)."""
+    spec = REGISTRY.get(name)
+    if spec is None:
+        return f"Unknown tool '{name}'.", True
+    if not isinstance(raw_input, dict):
+        return f"Invalid input for {name}: expected an object.", True
+    try:
+        args = spec.model.model_validate(raw_input)
+    except ValidationError as exc:
+        errs = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:8])
+        return f"Invalid input for {name}: {errs}", True
+    session = ctx.session
+    if spec.mutates:
+        session.checkpoint(name)
+    try:
+        result = spec.handler(ctx, args)
+        if spec.mutates:
+            session.commit()
+    except (EditError, KeyError, ValueError, FileNotFoundError) as exc:
+        if spec.mutates:
+            session.rollback()
+        msg = exc.args[0] if isinstance(exc, KeyError) and exc.args else str(exc)
+        return f"{name} failed: {msg}", True
+    except Exception as exc:  # noqa: BLE001 - report any failure back to the model
+        if spec.mutates:
+            session.rollback()
+        return f"{name} failed with {type(exc).__name__}: {exc}", True
+    return result, False
