@@ -145,6 +145,8 @@ class App:
     def add_asset(self, path: str, role: str, audio_stream: int = 0) -> dict:
         if self.job:
             raise Busy(f"'{self.job}' is still running")
+        if role not in ROLES:
+            role = "auto"
         with self.lock:
             a = self.project.add_asset(path, role, audio_stream=int(audio_stream or 0))
         self.bus.publish({"type": "state"})
@@ -558,7 +560,7 @@ def make_handler(app: App):
                     f.write(chunk)
                     remaining -= len(chunk)
             try:
-                result = app.add_asset(str(dest), role if role in ROLES else "other")
+                result = app.add_asset(str(dest), role if role in ROLES else "auto")
             except Exception:
                 dest.unlink(missing_ok=True)
                 raise

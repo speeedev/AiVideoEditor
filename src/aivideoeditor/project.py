@@ -155,16 +155,19 @@ class Project:
             known = ", ".join(sorted(self.data.assets)) or "(none)"
             raise KeyError(f"unknown asset '{asset_id}'. Known assets: {known}") from None
 
-    def add_asset(self, path: str | Path, role: str = "other", asset_id: str | None = None,
+    def add_asset(self, path: str | Path, role: str = "auto", asset_id: str | None = None,
                   notes: str = "", audio_stream: int = 0) -> Asset:
+        """Add a recording. ``role="auto"`` guesses it from the file's streams and name."""
         path = Path(path).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(path)
-        if role not in ROLES:
-            raise ValueError(f"role must be one of {', '.join(ROLES)}")
+        if role != "auto" and role not in ROLES:
+            raise ValueError(f"role must be auto or one of {', '.join(ROLES)}")
         info = probe(path)
         if not (info.has_video or info.has_audio):
             raise ValueError(f"{path} has neither audio nor video streams")
+        if role == "auto":
+            role = guess_role(path.name, info, [a.role for a in self.data.assets.values()])
         if audio_stream and audio_stream >= info.audio_streams:
             raise ValueError(f"{path.name} has {info.audio_streams} audio stream(s); "
                              f"audio_stream {audio_stream} does not exist")
@@ -246,6 +249,31 @@ class Project:
 
     def history(self) -> list[Path]:
         return sorted((self.root / "history").glob("*.json"), key=_history_index)
+
+
+_SCREEN_HINT = re.compile(r"screen|ekran|display|capture|obs|desktop|masaüstü|masaustu|kayit|kayıt|recording")
+_CAMERA_HINT = re.compile(r"cam|kamera|webcam|face|yuz|yüz|selfie|facecam")
+_MUSIC_HINT = re.compile(r"music|müzik|muzik|song|bgm|track|soundtrack|şarkı|sarki")
+
+
+def guess_role(name: str, info: MediaInfo, existing: list[str] | None = None) -> str:
+    """Best guess of a recording's role from its streams and file name.
+
+    A video file always lands on the timeline (screen or camera), so a single
+    "talking" video with its own sound just works.
+    """
+    n = name.lower()
+    existing = existing or []
+    if info.is_image:
+        return "other"
+    if not info.has_video:
+        return "music" if _MUSIC_HINT.search(n) else "mic"
+    if _CAMERA_HINT.search(n):
+        return "camera"
+    if _SCREEN_HINT.search(n):
+        return "screen"
+    # No hint: a second unnamed video next to a camera is most likely the screen recording.
+    return "screen" if "camera" in existing and "screen" not in existing else "camera"
 
 
 def _history_index(p: Path) -> int:

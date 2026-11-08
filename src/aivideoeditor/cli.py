@@ -418,8 +418,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("add", help="add recordings to a project")
     p.add_argument("project")
     p.add_argument("files", nargs="+")
-    p.add_argument("--role", default="other",
-                   choices=["screen", "camera", "mic", "music", "broll", "sfx", "other"])
+    p.add_argument("--role", default="auto",
+                   choices=["auto", "screen", "camera", "mic", "music", "broll", "sfx", "other"],
+                   help="auto (default) guesses from the file: video -> camera/screen, audio -> mic, image -> other")
     p.add_argument("--id", help="asset id (single file only)")
     p.add_argument("--notes", help="free-form notes for the editor about this asset")
     p.add_argument("--audio-stream", type=int, default=0,

@@ -183,3 +183,20 @@ def test_music_bed_follows_content_end():
     ops.ripple_delete(tl, [(10, 30)])
     assert tl.duration == pytest.approx(40)
     assert music.clips[0].end == pytest.approx(40) and music.clips[0].fade_out >= 2.0
+
+
+def test_guess_role():
+    from aivideoeditor.media.probe import MediaInfo
+    from aivideoeditor.project import guess_role
+    video_av = MediaInfo("x", 10, True, True)
+    video = MediaInfo("x", 10, True, False)
+    audio = MediaInfo("x", 10, False, True)
+    image = MediaInfo("x", 3600, True, False, is_image=True)
+    assert guess_role("video.mp4", video_av) == "camera"             # a lone talking video
+    assert guess_role("Screen Recording 2026.mov", video) == "screen"
+    assert guess_role("Ekran Kaydı.mp4", video_av) == "screen"
+    assert guess_role("webcam.mp4", video_av) == "camera"
+    assert guess_role("clip2.mp4", video, ["camera"]) == "screen"    # second unnamed video
+    assert guess_role("rode.wav", audio) == "mic"
+    assert guess_role("bgm.mp3", audio) == "music"
+    assert guess_role("logo.png", image) == "other"

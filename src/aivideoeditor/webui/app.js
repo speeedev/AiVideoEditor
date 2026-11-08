@@ -124,21 +124,14 @@ function renderAssets() {
   }
 }
 
-function guessRole(name) {
-  const n = name.toLowerCase();
-  const sel = $("uploadRole").value;
-  if (sel !== "auto") return sel;
-  if (/music|müzik|muzik|song|bgm/.test(n)) return "music";
-  if (/screen|ekran|display|capture|obs/.test(n)) return "screen";
-  if (/cam|kamera|webcam|face|yuz|yüz/.test(n)) return "camera";
-  if (/\.(wav|mp3|m4a|aac|flac|ogg|aiff?)$/.test(n)) return "mic";
-  if (/\.(png|jpe?g|webp|gif|bmp)$/.test(n)) return "other";
-  return "other";
+function guessRole() {
+  // "auto": the server decides from the file's streams (video / audio / image) and name.
+  return $("uploadRole").value;
 }
 async function uploadFiles(files) {
   for (const f of files) {
     status(`${f.name} yükleniyor…`);
-    const res = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&role=${guessRole(f.name)}`,
+    const res = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&role=${guessRole()}`,
       { method: "POST", body: f });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { status(`${f.name}: ${data.error || res.statusText}`, true); continue; }
@@ -531,7 +524,7 @@ function wire() {
   $("btnAddPath").onclick = guard(async () => {
     const p = $("pathInput").value.trim();
     if (!p) return;
-    await api("/api/assets", { path: p, role: guessRole(p), audio_stream: +$("audioStream").value || 0 });
+    await api("/api/assets", { path: p, role: guessRole(), audio_stream: +$("audioStream").value || 0 });
     $("pathInput").value = "";
   });
 
