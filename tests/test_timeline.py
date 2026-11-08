@@ -224,3 +224,20 @@ def test_add_asset_to_timeline(session, demo_media, tmp_path):
     assert ov.duration == 5.0 and tl.find_clip(ov.id)[0].role == "overlay"
     assert validate(tl, {a.id: a.duration for a in p.assets.values()}) == []
     assert m.end > 0
+
+
+def test_move_range_keeps_sync():
+    tl = make_tl()
+    ops.add_text(tl, 12, 14, "inside")
+    m = ops.add_marker(tl, 15, "m")
+    moved = ops.move_range(tl, 10, 20, 40)
+    assert moved == pytest.approx(10) and tl.duration == pytest.approx(60)
+    assert offsets_consistent(tl) and validate(tl, DUR) == []
+    v1 = tl.track("V1")
+    assert v1.clip_at(10.5).source_time(10.5) == pytest.approx(20.5)   # what followed moved up
+    assert v1.clip_at(30.5).source_time(30.5) == pytest.approx(10.5)   # the range now starts at 30
+    assert (tl.texts[0].start, m.time) == pytest.approx((32, 35))
+    ops.move_range(tl, 30, 40, 0)                                       # and back to the front
+    assert v1.clip_at(0.5).source_time(0.5) == pytest.approx(10.5)
+    with pytest.raises(EditError):
+        ops.move_range(tl, 5, 15, 10)

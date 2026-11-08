@@ -32,6 +32,7 @@ class MediaInfo:
     is_image: bool = False
     video_start: float = 0.0   # stream start relative to the file start (seconds)
     audio_start: float = 0.0
+    created: str | None = None  # recording time from the file's tags (ISO 8601), if any
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -93,6 +94,7 @@ def probe(path: str | Path) -> MediaInfo:
         if still_codec and (not duration or duration < 0.05 or frames in ("1", 1)):
             info.is_image = True
             info.duration = STILL_DURATION
+    info.created = _creation_time(fmt, video, audio)
     fmt_start = _float(fmt.get("start_time")) or 0.0
     if video is not None and _float(video.get("start_time")) is not None:
         info.video_start = max(0.0, _float(video.get("start_time")) - fmt_start)
@@ -111,6 +113,15 @@ def probe(path: str | Path) -> MediaInfo:
         info.channels = audio.get("channels")
         info.audio_codec = audio.get("codec_name")
     return info
+
+
+def _creation_time(fmt: dict, *streams: dict | None) -> str | None:
+    for tags in [fmt.get("tags") or {}] + [(st or {}).get("tags") or {} for st in streams]:
+        for key in ("creation_time", "com.apple.quicktime.creationdate", "date"):
+            for k, v in tags.items():
+                if k.lower() == key and v:
+                    return str(v)
+    return None
 
 
 def _float(value) -> float | None:

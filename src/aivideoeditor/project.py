@@ -38,7 +38,8 @@ class SyncInfo(BaseModel):
     offset: float = 0.0          # seconds on the reference clock where this asset starts
     drift_ppm: float = 0.0
     confidence: float = 0.0
-    method: str = "audio"
+    method: str = "audio"        # reference | audio | assumed | time | manual
+    group: int = 0               # recordings of the same moment share a group; separate scenes differ
 
 
 class Asset(BaseModel):
@@ -260,7 +261,8 @@ def guess_role(name: str, info: MediaInfo, existing: list[str] | None = None) ->
     """Best guess of a recording's role from its streams and file name.
 
     A video file always lands on the timeline (screen or camera), so a single
-    "talking" video with its own sound just works.
+    "talking" video with its own sound just works. ``existing`` is kept for callers;
+    the guess depends only on the file.
     """
     n = name.lower()
     existing = existing or []
@@ -272,8 +274,13 @@ def guess_role(name: str, info: MediaInfo, existing: list[str] | None = None) ->
         return "camera"
     if _SCREEN_HINT.search(n):
         return "screen"
-    # No hint: a second unnamed video next to a camera is most likely the screen recording.
-    return "screen" if "camera" in existing and "screen" not in existing else "camera"
+    # No name hint: screen recordings usually have no sound of their own, or a display's 16:10 shape;
+    # anything else (phones, cameras, several takes of a scene) is camera footage.
+    if not info.has_audio:
+        return "screen"
+    if info.width and info.height and abs(info.width / info.height - 1.6) < 0.02:
+        return "screen"
+    return "camera"
 
 
 def _history_index(p: Path) -> int:

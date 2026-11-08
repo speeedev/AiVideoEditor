@@ -146,10 +146,12 @@ function renderAssets() {
     if (a.analysis.transcript) b(`transkript ${a.analysis.words}`, "on");
     if (a.analysis.speech) b("sessizlik", "on");
     if (a.analysis.visual) b("görsel", "on");
+    if (a.scene) b(`sahne ${a.scene}`, "on");
     if (a.sync) {
-      if (a.sync.method === "reference") b("senkron referansı", "on");
-      else if (a.sync.method === "audio") b(`senkron ${a.sync.offset >= 0 ? "+" : ""}${a.sync.offset.toFixed(3)} sn`, "on");
-      else b(`senkron ${a.sync.method} ${a.sync.offset.toFixed(2)} sn`, "warn");
+      if (a.sync.method === "audio") b(`senkron ${a.sync.offset >= 0 ? "+" : ""}${a.sync.offset.toFixed(3)} sn`, "on");
+      else if (a.sync.method === "manual") b(`elle ${a.sync.offset.toFixed(2)} sn`, "on");
+      else if (a.sync.method === "time") b(`çekim saatine göre ${a.sync.offset.toFixed(1)} sn`, "warn");
+      else if (a.sync.method === "reference") b(a.scene ? "senkron referansı" : "senkron tamam", "on");
     }
     item.appendChild(badges);
     const row = el("div", "row");

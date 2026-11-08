@@ -184,8 +184,11 @@ class App:
     def state(self) -> dict[str, Any]:
         if self.project is None:
             return self.launcher_state()
+        from .scenes import scene_groups
         with self.lock:
             p = self.project
+            groups = scene_groups(p)
+            scene_of = {a.id: (i + 1, len(g)) for i, g in enumerate(groups) for a in g} if len(groups) > 1 else {}
             assets = []
             for a in p.assets.values():
                 tr = p.transcript(a.id)
@@ -193,6 +196,7 @@ class App:
                     "id": a.id, "role": a.role, "path": a.path, "name": Path(a.path).name,
                     "duration": a.duration, "has_video": a.has_video, "has_audio": a.has_audio,
                     "is_image": a.is_image, "audio_stream": a.audio_stream,
+                    "scene": scene_of.get(a.id, (None, 0))[0],
                     "width": a.info.get("width"), "height": a.info.get("height"),
                     "sync": a.sync.model_dump() if a.sync else None,
                     "analysis": {"transcript": tr is not None, "speech": p.speech(a.id) is not None,

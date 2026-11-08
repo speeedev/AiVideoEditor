@@ -38,7 +38,9 @@ class SyncResult:
 
     @property
     def reliable(self) -> bool:
-        return self.confidence >= 6.0
+        # The precise (GCC-PHAT) check must have matched too: two takes of the same script can
+        # have similar loudness envelopes, but only the same recording matches sample by sample.
+        return self.confidence >= 6.0 and bool(self.measurements)
 
     def offset_at(self, ref_time: float) -> float:
         """Offset corrected for drift at a given reference time."""

@@ -103,8 +103,17 @@ class AgentContext:
         if d.brief:
             lines.append(f"Brief: {d.brief}")
         lines.append(f"Output canvas: {cv.width}x{cv.height} @ {cv.fps:g} fps")
-        primary = self.session.primary_audio()
-        lines.append(f"Primary speech recording (transcript/captions source): {primary or 'none'}")
+        sources = self.session.speech_sources()
+        lines.append(f"Speech recordings (transcript/captions source): {', '.join(sources) or 'none'}")
+        from ..scenes import scene_groups
+        n_scenes = len(scene_groups(proj))
+        if n_scenes > 1:
+            lines.append(f"Scenes: {n_scenes} separate scenes/takes (not recorded at the same moment); "
+                         "see get_scenes")
+        used = {c.asset_id for _, c in self.session.timeline.all_clips()}
+        unplaced = [a.id for a in proj.assets.values() if a.id not in used]
+        if unplaced and self.session.timeline.tracks:
+            lines.append(f"Not on the timeline: {', '.join(unplaced)}")
         lines.append("Assets:")
         for a in proj.assets.values():
             info = a.info

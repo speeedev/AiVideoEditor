@@ -28,6 +28,10 @@ read fresh times after editing instead of reusing old numbers.
 the session lines up across tracks. `ripple_delete` removes a time range from all unlocked tracks at \
 once, which keeps picture and sound in sync. Prefer it for cutting; give all ranges of one pass in a \
 single call (they are interpreted against the timeline before that call).
+- A project can hold several separate scenes or takes (files not recorded at the same moment). They start \
+out one after another in recording order; `get_scenes` lists them with their ranges, what is said and which \
+ones look like takes of the same script. Choose the order from the content and the brief (reorder with \
+`move_range`) and keep only the best take of a repeated scene (`ripple_delete` the others).
 - Video tracks stack bottom to top. A clip on a video track also plays its own audio at its `volume`; \
 when an external mic is present the camera/screen audio is normally at volume 0 so speech is not doubled.
 - Layouts (screen_only, camera_only, pip, side_by_side, stack) arrange the screen and camera tracks \

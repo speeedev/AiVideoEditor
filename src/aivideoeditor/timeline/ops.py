@@ -465,3 +465,61 @@ def add_marker(tl: Timeline, time: float, note: str) -> Marker:
     tl.markers.append(m)
     tl.markers.sort(key=lambda m: m.time)
     return m
+
+
+def move_range(tl: Timeline, a: float, b: float, to: float) -> float:
+    """Move [a, b) of the edit (all unlocked tracks, with its texts and markers) so it starts at ``to``.
+
+    ``to`` is a time on the current timeline outside the range; the content is
+    taken out (closing its gap) and inserted there (pushing later material on).
+    Used to reorder scenes or sections. Returns the length moved.
+    """
+    _check_range(a, b)
+    total = tl.duration
+    if a >= total - EPS:
+        raise EditError(f"range starts at {a:.2f}, after the end of the edit ({total:.2f})")
+    b = min(b, total)
+    to = min(max(to, 0.0), total)
+    if a + EPS < to < b - EPS:
+        raise EditError("the target time must be outside the range being moved")
+    if abs(to - a) < EPS or abs(to - b) < EPS:
+        return 0.0
+    tracks = _tracks(tl, None, include_locked=False)
+    ids = [t.id for t in tracks]
+    split_at(tl, a, ids)
+    split_at(tl, b, ids)
+    moved: list[tuple[Track, Clip]] = []
+    for t in tracks:
+        for c in [c for c in t.clips if c.start >= a - EPS and c.end <= b + EPS]:
+            t.clips.remove(c)
+            moved.append((t, c))
+    texts = [x for x in tl.texts if x.start >= a - EPS and x.end <= b + EPS]
+    markers = [m for m in tl.markers if a - EPS <= m.time < b - EPS]
+    tl.texts = [x for x in tl.texts if x not in texts]
+    tl.markers = [m for m in tl.markers if m not in markers]
+    length = b - a
+    # Close the gap the range leaves behind.
+    for t in tracks:
+        for c in t.clips:
+            if c.start >= b - EPS:
+                c.start -= length
+    _ripple_overlays(tl, a, b)
+    # Open a gap at the destination (in the closed-up timeline) and put the content there.
+    dest = to if to <= a else to - length
+    split_at(tl, dest, ids)
+    shift_after(tl, dest, length)
+    for t, c in moved:
+        c.start = dest + (c.start - a)
+        t.clips.append(c)
+    for x in texts:
+        x.start, x.end = dest + (x.start - a), dest + (x.end - a)
+        tl.texts.append(x)
+    for m in markers:
+        m.time = dest + (m.time - a)
+        tl.markers.append(m)
+    for t in tracks:
+        t.sort()
+    tl.texts.sort(key=lambda x: x.start)
+    tl.markers.sort(key=lambda m: m.time)
+    fit_music(tl)
+    return length

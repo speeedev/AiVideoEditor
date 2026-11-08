@@ -128,6 +128,13 @@ class RippleDeleteIn(BaseModel):
                                                        "tracks, which keeps everything in sync)")
 
 
+class MoveRangeIn(BaseModel):
+    start: float = Field(description="Range start (timeline time)")
+    end: float = Field(description="Range end (timeline time)")
+    to: float = Field(description="Timeline time (outside the range) where the moved part should start, "
+                                  "in current timeline time; 0 moves it to the beginning")
+
+
 class LiftIn(BaseModel):
     start: float
     end: float
@@ -357,12 +364,20 @@ def _source_words(words: list[Word], asset_id: str, start: float | None, end: fl
     return out
 
 
+def _sources(ctx, asset_id: str | None) -> list[str]:
+    """The recordings to read speech from: the given one, or every scene's speech recording."""
+    if asset_id:
+        return [_primary(ctx, asset_id)]
+    return ctx.session.speech_sources()
+
+
 def _pauses(ctx) -> list[tuple[float, float]]:
-    aid = ctx.session.primary_audio()
-    if aid is None:
-        return []
-    sp = ctx.session.project.speech(aid)
-    return silences_on_timeline(ctx.session.timeline, aid, sp) if sp else []
+    out: list[tuple[float, float]] = []
+    for aid in ctx.session.speech_sources():
+        sp = ctx.session.project.speech(aid)
+        if sp:
+            out += silences_on_timeline(ctx.session.timeline, aid, sp)
+    return sorted(out)
 
 
 def _duration_line(ctx) -> str:
@@ -397,20 +412,30 @@ def get_timeline(ctx, args: GetTimelineIn) -> ToolOutput:
 @tool("get_transcript", GetTranscriptIn)
 def get_transcript(ctx, args: GetTranscriptIn) -> ToolOutput:
     """What is said and when. In the timeline timebase the times are positions in the current edit, already
-    accounting for every cut; '✂' marks a cut, '(pause Xs)' a silence, '?' a low-confidence word."""
+    accounting for every cut (and covering every scene); '✂' marks a cut, '(pause Xs)' a silence, '?' a
+    low-confidence word."""
     if args.asset_id is None and ctx.session.primary_audio() is None:
         return NO_SPEECH
-    aid = _primary(ctx, args.asset_id)
     proj = ctx.session.project
-    tr = proj.transcript(aid)
-    if tr is None:
-        return (f"No transcript for '{aid}'. Run `ave analyze` with transcription, or rely on pauses "
-                f"(find_edit_candidates kind=pauses) and visuals.")
+    sources = _sources(ctx, args.asset_id)
+    have = [sid for sid in sources if proj.transcript(sid) is not None]
+    if not have:
+        return (f"No transcript for {', '.join(sources) or 'this project'}. Run `ave analyze` with transcription, "
+                f"or rely on pauses (find_edit_candidates kind=pauses) and visuals.")
     if args.timebase == "source":
-        words = _source_words(list(tr.words()), aid, args.start, args.end)
+        if len(have) > 1:
+            return ("Source times are per recording; pass asset_id (one of: " + ", ".join(have) + ").")
+        aid = have[0]
+        words = _source_words(list(proj.transcript(aid).words()), aid, args.start, args.end)
+        name = aid
     else:
-        words = _words_in(ctx.session.words(aid), args.start, args.end)
-    header = f"Transcript of {aid} ({args.timebase} time, language {tr.language or '?'}):\n"
+        words = _words_in(ctx.session.words(args.asset_id), args.start, args.end)
+        name = ", ".join(have)
+    lang = proj.transcript(have[0]).language or "?"
+    missing = [sid for sid in sources if sid not in have]
+    header = f"Transcript of {name} ({args.timebase} time, language {lang}):\n"
+    if missing:
+        header += f"(no transcript yet for {', '.join(missing)})\n"
     text = format_words(words, mode=args.mode)
     if len(text) > 60000:
         text = text[:60000] + "\n… (truncated: request a narrower range)"
@@ -423,27 +448,35 @@ def find_edit_candidates(ctx, args: FindCandidatesIn) -> ToolOutput:
     phrases that suggest a retake. Review them, then pass the ones you agree with to ripple_delete."""
     if args.asset_id is None and ctx.session.primary_audio() is None:
         return NO_SPEECH
-    aid = _primary(ctx, args.asset_id)
     proj = ctx.session.project
     tl = ctx.session.timeline
+    sources = _sources(ctx, args.asset_id)
     if args.kind == "pauses":
-        sp = proj.speech(aid)
-        if sp is None:
-            return f"No pause analysis for '{aid}' (run `ave analyze`)."
-        ranges = pause_ranges(tl, aid, sp, min_pause=args.min_pause, keep=args.keep)
+        ranges: list[tuple[float, float]] = []
+        analysed = False
+        for aid in sources:
+            sp = proj.speech(aid)
+            if sp is not None:
+                analysed = True
+                ranges += pause_ranges(tl, aid, sp, min_pause=args.min_pause, keep=args.keep)
+        if not analysed:
+            return f"No pause analysis for {', '.join(sources)} (run `ave analyze`)."
+        ranges.sort()
         total = sum(b - a for a, b in ranges)
         lines = [f"{len(ranges)} pauses longer than {args.min_pause}s would be shortened, saving {total:.1f}s:"]
         lines += [f"  [{a:.2f}, {b:.2f}]  ({b - a:.2f}s)" for a, b in ranges[:400]]
         return "\n".join(lines)
-    tr = proj.transcript(aid)
-    if tr is None:
-        return f"No transcript for '{aid}', so {args.kind} cannot be detected."
+    transcripts = [(aid, proj.transcript(aid)) for aid in sources]
+    transcripts = [(aid, tr) for aid, tr in transcripts if tr is not None]
+    if not transcripts:
+        return f"No transcript for {', '.join(sources)}, so {args.kind} cannot be detected."
     if args.kind == "fillers":
-        found = filler_ranges(tl, aid, tr)
+        found = sorted(f for aid, tr in transcripts for f in filler_ranges(tl, aid, tr))
         if not found:
             return "No filler words found in the transcript (Whisper may have omitted them; check pauses too)."
         return "Filler words:\n" + "\n".join(f"  [{a:.2f}, {b:.2f}] {w!r}" for a, b, w in found[:400])
-    found = repeated_phrases(tl, aid, tr)
+    found = sorted((f for aid, tr in transcripts for f in repeated_phrases(tl, aid, tr)),
+                   key=lambda f: f["first_take"])
     if not found:
         return "No obvious repeated phrases (retakes) found."
     lines = ["Possible retakes (an earlier take followed by a restart of the same words):"]
@@ -451,6 +484,7 @@ def find_edit_candidates(ctx, args: FindCandidatesIn) -> ToolOutput:
         a, b = f["first_take"]
         lines.append(f"  first take [{a:.2f}, {b:.2f}] restart at {f['retake_starts']:.2f}: {f['phrase']!r}")
     lines.append("Read the transcript around each one before cutting: keep the best (usually the last) take.")
+    lines.append("Whole scenes recorded more than once are listed by get_scenes.")
     return "\n".join(lines)
 
 
@@ -637,6 +671,84 @@ def ripple_delete(ctx, args: RippleDeleteIn) -> ToolOutput:
     removed = ops.ripple_delete(tl, ranges, args.tracks)
     msg = [f"Removed {removed:.2f}s in {len(ranges)} range(s) ({format_tc(before)} → {format_tc(tl.duration)})."]
     return "\n".join(msg + notes[:40])
+
+
+@tool("move_range", MoveRangeIn, mutates=True)
+def move_range(ctx, args: MoveRangeIn) -> ToolOutput:
+    """Move a part of the edit to another place, on all unlocked tracks at once (picture and sound stay in sync):
+    reorder scenes or sections. The part is taken out (its gap closes) and inserted at `to`."""
+    tl = ctx.session.timeline
+    moved = ops.move_range(tl, args.start, args.end, args.to)
+    if not moved:
+        return "Nothing moved: the target is already where the range starts or ends."
+    dest = args.to if args.to <= args.start else args.to - moved
+    return (f"Moved {format_tc(args.start)}–{format_tc(args.end)} ({moved:.2f}s); it now plays at "
+            f"{format_tc(dest)}–{format_tc(dest + moved)}.")
+
+
+def _scene_rows(ctx) -> list[dict]:
+    from ..scenes import recorded_window, scene_groups, speech_source
+    proj = ctx.session.project
+    tl = ctx.session.timeline
+    rows = []
+    for g in scene_groups(proj):
+        ids = {a.id for a in g}
+        clips = [c for _, c in tl.all_clips() if c.asset_id in ids]
+        src = speech_source(g)
+        words = [w for w in ctx.session.words(src)] if src and proj.transcript(src) else []
+        all_words = [w.text for w in proj.transcript(src).words()] if src and proj.transcript(src) else []
+        t0, _, how = recorded_window(g[0])
+        rows.append({
+            "assets": [a.id for a in g],
+            "range": (min(c.start for c in clips), max(c.end for c in clips)) if clips else None,
+            "source_len": max(a.duration for a in g if not a.is_image),
+            "recorded": t0, "recorded_how": how,
+            "first": " ".join(w.text for w in words[:14]),
+            "last": " ".join(w.text for w in words[-10:]) if len(words) > 14 else "",
+            "bigrams": _bigrams(all_words),
+        })
+    rows.sort(key=lambda r: (r["range"] is None, r["range"][0] if r["range"] else 0.0))
+    return rows
+
+
+def _bigrams(words: list[str]) -> set[tuple[str, str]]:
+    import re
+    norm = [re.sub(r"[^\wçğıöşü]", "", w.lower()) for w in words]
+    norm = [w for w in norm if w]
+    return set(zip(norm, norm[1:]))
+
+
+@tool("get_scenes", Empty)
+def get_scenes(ctx, args: Empty) -> ToolOutput:
+    """Separate scenes/takes in this project (recordings not made at the same moment), in timeline order, with
+    their current timeline range, recording time, the start and end of what is said, and which scenes look like
+    takes of the same script. Reorder with move_range; remove a take with ripple_delete on its range."""
+    import time as _time
+    rows = _scene_rows(ctx)
+    if len(rows) <= 1:
+        return ("All recordings belong to one scene (recorded at the same time). Retakes inside it show up in "
+                "find_edit_candidates kind=retakes and in the transcript.")
+    lines = [f"{len(rows)} scenes/takes (initially in recording order):"]
+    for i, r in enumerate(rows, start=1):
+        when = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(r["recorded"]))
+        when += "" if r["recorded_how"] == "tag" else " (file time)"
+        if r["range"]:
+            a, b = r["range"]
+            where = f"[{format_tc(a)}–{format_tc(b)}] ({b - a:.1f}s on the timeline)"
+        else:
+            where = "NOT on the timeline"
+        lines.append(f"Scene {i} {where}, recorded {when}, recordings: {', '.join(r['assets'])}")
+        if r["first"]:
+            lines.append(f"  starts: «{r['first']}»" + (f"  ends: «{r['last']}»" if r["last"] else ""))
+        for j, o in enumerate(rows, start=1):
+            if j == i or not r["bigrams"] or not o["bigrams"]:
+                continue
+            same = len(r["bigrams"] & o["bigrams"]) / min(len(r["bigrams"]), len(o["bigrams"]))
+            if same >= 0.5:
+                lines.append(f"  similar to scene {j} ({same:.0%} same word pairs): probably another take")
+    lines.append("Decide the order from the content and the brief, keep the best take of a repeated scene, "
+                 "then check the result with get_transcript and view_timeline.")
+    return "\n".join(lines)
 
 
 @tool("lift", LiftIn, mutates=True)
@@ -871,12 +983,15 @@ def set_captions(ctx, args: SetCaptionsIn) -> ToolOutput:
     """Turn burned-in captions (generated from the transcript, always in sync with the edit) on or off and
     style them."""
     props = args.model_dump()
-    if args.enabled and not props.get("source_asset"):
-        props["source_asset"] = ctx.session.timeline.captions.source_asset or ctx.session.primary_audio()
-    if args.enabled and props.get("source_asset") and ctx.session.project.transcript(props["source_asset"]) is None:
-        raise EditError(f"no transcript for '{props['source_asset']}', captions need one")
+    proj = ctx.session.project
+    if args.enabled:
+        src = props.get("source_asset") or ctx.session.timeline.captions.source_asset
+        sources = [src] if src else ctx.session.speech_sources()
+        if not any(proj.transcript(s) is not None for s in sources):
+            raise EditError(f"no transcript for {', '.join(sources) or 'any recording'}; captions need one")
     cap = ops.set_captions(ctx.session.timeline, **props)
-    return f"Captions {'on' if cap.enabled else 'off'} (source {cap.source_asset}, {cap.max_words} words/line)."
+    source = cap.source_asset or "every scene's speech"
+    return f"Captions {'on' if cap.enabled else 'off'} (source {source}, {cap.max_words} words/line)."
 
 
 CANVAS_PRESETS = {"landscape_1080p": (1920, 1080), "landscape_1440p": (2560, 1440), "landscape_720p": (1280, 720),
@@ -926,8 +1041,8 @@ def add_marker(ctx, args: AddMarkerIn) -> ToolOutput:
 
 @tool("assemble_timeline", AssembleIn, mutates=True)
 def assemble_timeline(ctx, args: AssembleIn) -> ToolOutput:
-    """Rebuild the edit from scratch: every synced recording laid down in full at its sync position, with a
-    default layout. Discards the current edit (it can be undone)."""
+    """Rebuild the edit from scratch: recordings of the same moment stacked in sync, separate scenes one after
+    another in recording order, each with a default layout. Discards the current edit (it can be undone)."""
     from ..timeline.assemble import assemble
     ctx.session.project.timeline = assemble(ctx.session.project, layout=args.layout)
     return "Timeline rebuilt from the synced recordings.\n" + describe_timeline(ctx.session.timeline)

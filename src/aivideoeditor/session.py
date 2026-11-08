@@ -87,14 +87,25 @@ class EditorSession:
         return self.timeline
 
     # -- transcript ---------------------------------------------------------
+    def speech_sources(self) -> list[str]:
+        """One speech recording per scene (falls back to the primary audio)."""
+        from .scenes import speech_sources
+        sources = speech_sources(self.project)
+        if not sources and self.primary_audio():
+            sources = [self.primary_audio()]
+        return sources
+
     def words(self, asset_id: str | None = None) -> list[TimelineWord]:
-        aid = asset_id or self.timeline.captions.source_asset or self.primary_audio()
-        if aid is None:
-            return []
-        tr = self.project.transcript(aid)
-        if tr is None:
-            return []
-        return words_on_timeline(self.timeline, aid, tr)
+        """Transcript words on the timeline: of one recording, or of every scene's speech recording."""
+        aid = asset_id or self.timeline.captions.source_asset
+        sources = [aid] if aid else self.speech_sources()
+        out: list[TimelineWord] = []
+        for sid in sources:
+            tr = self.project.transcript(sid)
+            if tr is not None:
+                out += words_on_timeline(self.timeline, sid, tr)
+        out.sort(key=lambda w: w.start)
+        return out
 
     def caption_words(self) -> list[TimelineWord] | None:
         """Words to caption: only those that are actually heard (skips muted / sped-up parts)."""
