@@ -70,12 +70,21 @@ class Segment:
     audio: bool
     starts_clip: bool
     ends_clip: bool
+    cont_prev: bool = False   # the previous clip on the track continues the same audio seamlessly
+    cont_next: bool = False
     video_input: int = -1
     audio_input: int = -1
 
     @property
     def t0(self) -> float:
         return self.f0 / self.fps
+
+    @property
+    def lead(self) -> float:
+        """Timeline seconds between the segment's first frame and the clip's first source sample.
+
+        Non-zero only when a clip starts between frame boundaries (e.g. at a sync offset)."""
+        return max(0.0, -self.clip.source_time(self.t0)) / self.clip.speed
 
     @property
     def duration(self) -> float:
@@ -119,11 +128,18 @@ def _visible(track: Track, clip: Clip, assets: Mapping[str, AssetLike]) -> bool:
             and clip.transform.opacity > 0 and bool(assets[clip.asset_id].info.get("has_video")))
 
 
+def _continues(a: Clip, b: Clip) -> bool:
+    """True when clip ``b`` picks up exactly where ``a`` left off (a split, not a cut)."""
+    return (a.asset_id == b.asset_id and abs(a.end - b.start) < 1e-3
+            and abs(a.source_out - b.source_in) < 1e-3 and abs(a.speed - b.speed) < 1e-9)
+
+
 def collect_segments(tl: Timeline, assets: Mapping[str, AssetLike], f0: int, f1: int,
                      fps: float, *, with_audio: bool = True) -> list[Segment]:
     segs: list[Segment] = []
     for track in tl.tracks:
-        for clip in track.clips:
+        clips = sorted(track.clips, key=lambda c: c.start)
+        for i, clip in enumerate(clips):
             cf0, cf1 = round(clip.start * fps), round(clip.end * fps)
             s0, s1 = max(cf0, f0), min(cf1, f1)
             if s1 <= s0:
@@ -133,15 +149,32 @@ def collect_segments(tl: Timeline, assets: Mapping[str, AssetLike], f0: int, f1:
             if not (video or audio):
                 continue
             segs.append(Segment(track, clip, s0, s1, fps, video, audio,
-                                starts_clip=s0 == cf0, ends_clip=s1 == cf1))
+                                starts_clip=s0 == cf0, ends_clip=s1 == cf1,
+                                cont_prev=i > 0 and _continues(clips[i - 1], clip),
+                                cont_next=i + 1 < len(clips) and _continues(clip, clips[i + 1])))
     return segs
+
+
+def _fade_windows(tl: Timeline, fps: float) -> list[tuple[int, int]]:
+    """Frame ranges a chunk boundary must not fall inside (video fades are per segment)."""
+    out = []
+    for t in tl.video_tracks:
+        for c in t.clips:
+            cf0, cf1 = round(c.start * fps), round(c.end * fps)
+            if c.fade_in > 0:
+                out.append((cf0, cf0 + math.ceil(c.fade_in * fps)))
+            if c.fade_out > 0:
+                out.append((cf1 - math.ceil(c.fade_out * fps), cf1))
+    return out
 
 
 def plan_chunks(tl: Timeline, assets: Mapping[str, AssetLike], fps: float, max_inputs: int) -> list[ChunkPlan]:
     total = max(1, round(tl.duration * fps))
-    # Candidate chunk boundaries: every clip edge.
+    # Candidate chunk boundaries: every clip edge, except inside video fades.
     edges = sorted({0, total} | {min(max(round(c.start * fps), 0), total) for _, c in tl.all_clips()}
                    | {min(max(round(c.end * fps), 0), total) for _, c in tl.all_clips()})
+    windows = _fade_windows(tl, fps)
+    edges = [e for e in edges if e in (0, total) or not any(a < e < b for a, b in windows)]
     chunks: list[ChunkPlan] = []
     start = 0
     while start < total:
@@ -185,7 +218,11 @@ def _video_chain(seg: Segment, asset: AssetLike, st: RenderSettings, chunk_t0: f
     tr = clip.transform
     W, H = st.width, st.height
     fps = fps_string(st.fps)
-    filters = [f"setpts=(PTS-STARTPTS)/{clip.speed:.6f}", f"fps={fps}",
+    # Timestamps after input seeking are relative to the seek point and consistent across the
+    # file's streams; keep them (instead of resetting each stream to 0) so audio/video offsets
+    # inside the file and sub-frame positions are honoured. fps=start_time=0 pads the start.
+    lead = f"+{seg.lead:.6f}/TB" if seg.lead > 1e-6 else ""
+    filters = [f"setpts=PTS/{clip.speed:.6f}{lead}", f"fps={fps}:start_time=0",
                f"tpad=stop_mode=clone:stop_duration={seg.duration + 1:.3f}",
                f"trim=duration={seg.duration:.6f}"]
     if dims:
@@ -267,9 +304,14 @@ def _zoompan(seg: Segment, ow: int, oh: int, fps: str) -> str:
     return f"zoompan=z='{z}':x='{x}':y='{y}':d=1:s={ow}x{oh}:fps={fps}"
 
 
+MICRO_FADE = 0.008  # seconds; removes clicks at hard audio cuts
+
+
 def _audio_chain(seg: Segment, chunk_t0: float) -> str:
     clip = seg.clip
-    filters = ["asetpts=PTS-STARTPTS", f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
+    # first_pts=0 pads with silence when the file's audio starts after the seek point
+    # (e.g. camera files whose audio stream begins a few hundred ms after the video).
+    filters = [f"aresample={AUDIO_RATE}:async=1:first_pts=0", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
     filters += _atempo_chain(clip.speed)
     n = round(seg.duration * AUDIO_RATE)
     filters += [f"apad=whole_len={n}", f"atrim=end_sample={n}"]
@@ -278,17 +320,26 @@ def _audio_chain(seg: Segment, chunk_t0: float) -> str:
     if seg.track.enhance:
         filters += ["highpass=f=80", "acompressor=threshold=-20dB:ratio=3:attack=8:release=160:makeup=2"]
     gain = clip.volume * seg.track.volume
-    if abs(gain - 1) > 1e-6:
+    # Requested fades are computed in clip time so they stay correct when a render chunk
+    # boundary falls inside the fade.
+    off = seg.t0 - clip.start
+    terms = [f"{gain:.4f}"]
+    if clip.fade_in > 0.05:
+        terms.append(f"min(1,max(0,(t+{off:.6f})/{clip.fade_in:.4f}))")
+    if clip.fade_out > 0.05:
+        terms.append(f"min(1,max(0,({clip.duration:.6f}-t-{off:.6f})/{clip.fade_out:.4f}))")
+    if len(terms) > 1:
+        filters.append(f"volume='{'*'.join(terms)}':eval=frame")
+    elif abs(gain - 1) > 1e-6:
         filters.append(f"volume={gain:.4f}")
-    # Short fades at real cuts avoid clicks; longer ones when requested.
-    fi = max(clip.fade_in, 0.008) if seg.starts_clip else 0.0
-    fo = max(clip.fade_out, 0.008) if seg.ends_clip else 0.0
-    if fi:
-        filters.append(f"afade=t=in:st=0:d={min(fi, seg.duration / 2):.4f}")
-    if fo:
-        d = min(fo, seg.duration / 2)
+    # Micro-fades only at real cuts (not where a split continues the same audio).
+    if seg.starts_clip and not seg.cont_prev and clip.fade_in <= 0.05:
+        d = min(max(clip.fade_in, MICRO_FADE), seg.duration / 2)
+        filters.append(f"afade=t=in:st=0:d={d:.4f}")
+    if seg.ends_clip and not seg.cont_next and clip.fade_out <= 0.05:
+        d = min(max(clip.fade_out, MICRO_FADE), seg.duration / 2)
         filters.append(f"afade=t=out:st={seg.duration - d:.4f}:d={d:.4f}")
-    delay = round((seg.t0 - chunk_t0) * AUDIO_RATE)
+    delay = round((seg.t0 - chunk_t0 + seg.lead) * AUDIO_RATE)
     if delay > 0:
         filters.append(f"adelay={delay}S:all=1")
     return ",".join(filters)
@@ -334,13 +385,19 @@ def build_chunk(
     n_inputs = 0
     dims: dict[int, tuple[int, int]] = {}
 
-    def add_input(seg: Segment, path: str, is_image: bool) -> int:
+    def add_input(seg: Segment, path: str, is_image: bool, shift: float = 0.0) -> int:
+        """``shift``: the input file's time 0 is at this asset time (proxies of files whose
+        video starts after their audio)."""
         nonlocal args, n_inputs
         if is_image:
             args += ["-loop", "1", "-framerate", fps, "-t", f"{seg.duration + 0.5:.6f}", "-i", path]
         else:
             pad = 0.25 * seg.clip.speed
-            args += ["-ss", f"{seg.src_in:.6f}", "-t", f"{seg.src_dur + pad:.6f}", "-i", path]
+            ss = seg.src_in - shift
+            if ss < 0:
+                args += ["-itsoffset", f"{-ss:.6f}"]
+                ss = 0.0
+            args += ["-ss", f"{ss:.6f}", "-t", f"{seg.src_dur + pad:.6f}", "-i", path]
         n_inputs += 1
         return n_inputs - 1
 
@@ -351,7 +408,8 @@ def build_chunk(
         is_image = bool(asset.info.get("is_image"))
         proxy = st.proxies.get(seg.clip.asset_id) if want_video and seg.video else None
         if want_video and seg.video:
-            seg.video_input = add_input(seg, proxy.path if proxy else asset.path, is_image)
+            shift = float(asset.info.get("video_start") or 0.0) if proxy else 0.0
+            seg.video_input = add_input(seg, proxy.path if proxy else asset.path, is_image, shift)
             if proxy:
                 dims[seg.video_input] = (proxy.width, proxy.height)
         if want_audio and seg.audio:

@@ -165,3 +165,86 @@ def test_proxies_for_preview(tmp_path):
     assert a.shape == b.shape and np.abs(a - b).mean() < 6   # same picture, just from the proxy
     out = s.render(preview=True)
     assert _frames(out) == round(s.timeline.duration * 30)
+
+
+def _flash_and_beep(path):
+    """(time of the first bright frame, time of the first loud audio sample) of a file."""
+    from aivideoeditor.analysis.visual import decode_thumbs
+    frames = decode_thumbs(path, 30)
+    bright = int(np.argmax(frames.mean(axis=(1, 2)) > 0.5))
+    audio = decode_audio(path, 48000)
+    loud = int(np.argmax(np.abs(audio) > 0.2))
+    return bright / 30, loud / 48000
+
+
+def test_audio_stream_starting_late_stays_in_sync(tmp_path):
+    """A camera file whose audio stream starts 0.28 s after its video (common on phones)."""
+    from aivideoeditor.project import Project
+    from aivideoeditor.session import EditorSession
+    from aivideoeditor.timeline import ops
+    v = tmp_path / "v.mp4"
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=black:s=320x180:r=30:d=5",
+                "-vf", "drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='between(t,2,2.1)'",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-y", str(v)])
+    a = tmp_path / "a.wav"   # beep at 1.72 s of the audio stream = 2.0 s of the file after the offset
+    run_ffmpeg(["-f", "lavfi", "-i", "sine=f=1000:d=4.7:sample_rate=48000",
+                "-af", "volume='if(between(t,1.72,1.82),6,0)':eval=frame", "-y", str(a)])
+    cam = tmp_path / "cam.mp4"
+    run_ffmpeg(["-i", str(v), "-itsoffset", "0.28", "-i", str(a), "-map", "0:v", "-map", "1:a",
+                "-c:v", "copy", "-c:a", "aac", "-y", str(cam)])
+    assert probe(cam).audio_start > 0.2
+    flash, beep = _flash_and_beep(cam)
+    assert abs(flash - 2.0) < 0.04 and abs(beep - 2.0) < 0.03     # analysis sees file time
+
+    p = Project.create(tmp_path / "p", width=320, height=180)
+    p.add_asset(cam, "camera")
+    s = EditorSession(p)
+    s.assemble()
+    s.timeline.audio.normalize = False
+    out = s.render(preview=False)
+    flash, beep = _flash_and_beep(out)
+    assert abs(flash - beep) < 0.035, (flash, beep)
+    # Same after a cut that makes the clip start mid-file.
+    ops.ripple_delete(s.timeline, [(0.0, 1.0)])
+    s.commit()
+    out = s.render(preview=False)
+    flash, beep = _flash_and_beep(out)
+    assert abs(flash - 1.0) < 0.04 and abs(flash - beep) < 0.035, (flash, beep)
+
+
+def test_split_does_not_dip_continuous_audio(session, tmp_path):
+    from aivideoeditor.timeline import ops
+    tl = session.timeline
+    tl.audio.normalize = False
+    before = decode_audio(session.project.asset("mic").path, 48000)
+    ops.split_at(tl, 3.0)
+    session.commit()
+    st = RenderSettings.for_timeline(tl, preview=True, preview_width=320)
+    render_timeline(tl, session.project.assets, tmp_path / "s.mp4", st, workdir=tmp_path / "w")
+    got = decode_audio(tmp_path / "w" / "audio.wav", 48000)
+    i = 3 * 48000
+    assert np.abs(got[i - 480:i + 480] - before[i - 480:i + 480]).max() < 0.01
+
+
+def test_long_audio_fade_survives_chunk_boundaries(session, tmp_path):
+    from aivideoeditor.timeline import ops
+    tl = session.timeline
+    tl.audio.normalize = False
+    mic = tl.track("A1").clips[0]
+    mic.fade_out = 3.0
+    ops.split_at(tl, 5.0, ["V1"])          # extra clip edges -> chunk boundaries
+    ops.split_at(tl, 10.0, ["V1"])
+    session.commit()
+    st = RenderSettings.for_timeline(tl, preview=True, preview_width=320)
+    st.max_inputs = 2
+    render_timeline(tl, session.project.assets, tmp_path / "f.mp4", st, workdir=tmp_path / "w")
+    got = decode_audio(tmp_path / "w" / "audio.wav", 48000)
+    src = decode_audio(session.project.asset("mic").path, 48000)
+    end = mic.end
+    for t in (end - 2.5, end - 1.5, end - 0.5):       # gain follows the 3 s ramp across boundaries
+        i0 = int(t * 48000)
+        seg_src = src[i0:i0 + 2400]
+        if np.abs(seg_src).max() < 0.05:
+            continue
+        ratio = np.abs(got[i0:i0 + 2400]).sum() / np.abs(seg_src).sum()
+        assert abs(ratio - (end - t) / 3.0) < 0.1, (t, ratio)

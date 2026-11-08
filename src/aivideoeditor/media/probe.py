@@ -30,6 +30,8 @@ class MediaInfo:
     rotation: int = 0
     audio_streams: int = 0
     is_image: bool = False
+    video_start: float = 0.0   # stream start relative to the file start (seconds)
+    audio_start: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -91,6 +93,11 @@ def probe(path: str | Path) -> MediaInfo:
         if still_codec and (not duration or duration < 0.05 or frames in ("1", 1)):
             info.is_image = True
             info.duration = STILL_DURATION
+    fmt_start = _float(fmt.get("start_time")) or 0.0
+    if video is not None and _float(video.get("start_time")) is not None:
+        info.video_start = max(0.0, _float(video.get("start_time")) - fmt_start)
+    if audio is not None and _float(audio.get("start_time")) is not None:
+        info.audio_start = max(0.0, _float(audio.get("start_time")) - fmt_start)
     if video is not None:
         info.width = video.get("width")
         info.height = video.get("height")

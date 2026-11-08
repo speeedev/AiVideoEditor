@@ -23,7 +23,10 @@ def decode_audio(
     args += ["-i", str(path)]
     if duration is not None:
         args += ["-t", f"{max(duration, 0.0):.6f}"]
-    args += ["-vn", "-map", f"0:a:{stream}", "-ac", "1", "-ar", str(sample_rate), "-f", "f32le", "pipe:1"]
+    # first_pts=0: sample 0 is the file's time 0 (pads when the audio stream starts late), so
+    # analysis times line up with the video and with render timestamps.
+    args += ["-vn", "-map", f"0:a:{stream}", "-af", f"aresample={sample_rate}:async=1:first_pts=0",
+             "-ac", "1", "-ar", str(sample_rate), "-f", "f32le", "pipe:1"]
     proc = run_ffmpeg(args, capture_stdout=True)
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
