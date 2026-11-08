@@ -131,3 +131,7 @@ h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing
 .composer { border-top: 1px solid var(--line); padding: 10px 12px; }
 .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; z-index: 50; cursor: zoom-out; }
 .lightbox img { max-width: 95%; max-height: 95%; }
+.selection { position: absolute; top: 0; bottom: 0; background: rgba(106,165,255,.18); border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent); z-index: 3; pointer-events: none; margin-left: 90px; }
+.sel-tools { display: flex; gap: 6px; align-items: center; }
+.sel-tools select { padding: 2px 6px; font-size: 12px; }

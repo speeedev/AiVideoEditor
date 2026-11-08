@@ -245,6 +245,24 @@ class App:
             return {"stop_reason": result.stop_reason}
         self.start_job("agent", run)
 
+    def edit(self, tool: str, args: dict) -> dict:
+        """Apply one editing tool directly (manual edits from the UI), with the same validation and undo."""
+        from types import SimpleNamespace
+
+        from .agent.tools import run_tool
+        allowed = {"ripple_delete", "apply_layout", "zoom", "speed_up", "add_text", "add_marker", "set_captions"}
+        if tool not in allowed:
+            raise ValueError(f"tool '{tool}' is not available from the UI")
+        if self.job:
+            raise Busy(f"'{self.job}' is still running")
+        ctx = SimpleNamespace(session=self.session, lock=self.lock, last_render=None)
+        out, is_error = run_tool(ctx, tool, args)
+        self.bus.publish({"type": "state"})
+        text = out if isinstance(out, str) else " ".join(b.get("text", "") for b in out if b.get("type") == "text")
+        if is_error:
+            raise ValueError(text)
+        return {"result": text}
+
     def conversation(self) -> list[dict]:
         """Chat history (text only) for the panel."""
         f = self.project.root / "agent" / "conversation.json"
@@ -463,6 +481,8 @@ def make_handler(app: App):
                         ok = app.session.undo() if path == "/api/undo" else app.session.redo()
                     app.bus.publish({"type": "state"})
                     return self._json({"ok": ok})
+                if path == "/api/edit":
+                    return self._json(app.edit(body.get("tool", ""), body.get("args") or {}))
                 if path == "/api/export":
                     from .export import export_timeline
                     with app.lock:

@@ -83,6 +83,19 @@
         <button id="tlFit" class="small">Sığdır</button>
         <label class="small muted">Yakınlaştır</label>
         <input id="tlZoom" type="range" min="2" max="400" value="40">
+        <span id="selBox" class="sel-tools hidden">
+          <span id="selText" class="small"></span>
+          <button id="selCut" class="small" title="Seçili aralığı tüm track'lerden kes">✂ Kes</button>
+          <select id="selLayout" class="small" title="Seçili aralığa layout uygula">
+            <option value="">Layout…</option>
+            <option value="screen_only">Sadece ekran</option>
+            <option value="camera_only">Sadece kamera</option>
+            <option value="pip">Ekran + köşede kamera</option>
+            <option value="side_by_side">Yan yana</option>
+            <option value="stack">Üst üste (dikey)</option>
+          </select>
+          <button id="selClear" class="small">Seçimi kaldır</button>
+        </span>
         <span class="grow"></span>
         <span id="tlInfo" class="muted small"></span>
       </div>
@@ -90,6 +103,7 @@
         <div id="tlInner" class="tl-inner">
           <div id="ruler" class="ruler"></div>
           <div id="tracks"></div>
+          <div id="selection" class="selection hidden"></div>
           <div id="playhead" class="playhead"></div>
         </div>
       </div>

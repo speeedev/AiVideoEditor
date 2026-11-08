@@ -253,14 +253,50 @@ function renderTimeline() {
     tracks.appendChild(row);
   }
   document.querySelectorAll(".lane, .ruler").forEach((lane) => {
-    lane.onclick = (e) => {
+    lane.onmousedown = (e) => {
+      if (e.button !== 0) return;
       const r = lane.getBoundingClientRect();
-      setPlayhead((e.clientX - r.left) / pps);
+      const t0 = (e.clientX - r.left) / pps;
+      let moved = false;
+      const move = (ev) => {
+        const t1 = (ev.clientX - r.left) / pps;
+        if (Math.abs(ev.clientX - e.clientX) > 4) {
+          moved = true;
+          setSelection(Math.min(t0, t1), Math.max(t0, t1));
+        }
+      };
+      const up = (ev) => {
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", up);
+        if (!moved) setPlayhead(t0);
+        else setPlayhead((ev.clientX - r.left) / pps);
+      };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+      e.preventDefault();
     };
   });
+  drawSelection();
   $("tlInfo").textContent = `${tl.tracks.length} track · ${tl.tracks.reduce((n, t) => n + t.clips.length, 0)} klip · ` +
     `${tc(S.duration)} · ${tl.canvas.width}×${tl.canvas.height} ${tl.canvas.fps} fps`;
   setPlayhead(Math.min(playhead, S.duration), true);
+}
+let selection = null;  // [start, end] in timeline seconds
+function setSelection(a, b) {
+  a = Math.max(0, a);
+  b = Math.min(S.duration, b);
+  selection = b - a > 0.02 ? [a, b] : null;
+  drawSelection();
+}
+function drawSelection() {
+  const box = $("selection");
+  const tools = $("selBox");
+  if (!selection || !S) { box.classList.add("hidden"); tools.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  tools.classList.remove("hidden");
+  box.style.left = `${selection[0] * pps}px`;
+  box.style.width = `${(selection[1] - selection[0]) * pps}px`;
+  $("selText").textContent = `Seçim ${tc(selection[0])}–${tc(selection[1])} (${(selection[1] - selection[0]).toFixed(2)} sn)`;
 }
 function setPlayhead(t, noStill) {
   playhead = Math.max(0, Math.min(t, Math.max(0, S.duration - 0.001)));
@@ -409,9 +445,13 @@ async function loadConversation() {
 const send = guard(async () => {
   const text = $("prompt").value.trim();
   if (!text) return;
-  chatAdd("user", text);
+  let instruction = text;
+  if (selection) {
+    instruction = `[Seçili aralık (timeline): ${selection[0].toFixed(2)}–${selection[1].toFixed(2)} sn]\n${text}`;
+  }
+  chatAdd("user", instruction);
   $("prompt").value = "";
-  await api("/api/agent", { instruction: text, new: $("newConv").checked });
+  await api("/api/agent", { instruction, new: $("newConv").checked });
   $("newConv").checked = false;
 });
 
@@ -456,6 +496,21 @@ function wire() {
   $("tlZoom").oninput = () => { pps = +$("tlZoom").value; userZoomed = true; renderTimeline(); };
   $("tlFit").onclick = () => { userZoomed = false; renderTimeline(); };
   $("send").onclick = send;
+  $("selClear").onclick = () => { selection = null; drawSelection(); };
+  $("selCut").onclick = guard(async () => {
+    if (!selection) return;
+    const r = await api("/api/edit", { tool: "ripple_delete", args: { ranges: [{ start: selection[0], end: selection[1] }] } });
+    status(r.result);
+    selection = null;
+    drawSelection();
+  });
+  $("selLayout").onchange = guard(async () => {
+    const layout = $("selLayout").value;
+    $("selLayout").value = "";
+    if (!selection || !layout) return;
+    const r = await api("/api/edit", { tool: "apply_layout", args: { start: selection[0], end: selection[1], layout } });
+    status(r.result);
+  });
   $("prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
   for (const b of $("suggestions").querySelectorAll("button"))
     b.onclick = () => { $("prompt").value = b.textContent; $("prompt").focus(); };
@@ -476,7 +531,9 @@ function wire() {
   document.addEventListener("keydown", (e) => {
     if (["TEXTAREA", "INPUT", "SELECT"].includes(document.activeElement.tagName)) return;
     const fps = S ? S.timeline.canvas.fps : 30;
-    if (e.key === "ArrowRight") setPlayhead(playhead + (e.shiftKey ? 1 : 1 / fps));
+    if ((e.key === "Delete" || e.key === "Backspace") && selection) { $("selCut").click(); }
+    else if (e.key === "Escape") { selection = null; drawSelection(); }
+    else if (e.key === "ArrowRight") setPlayhead(playhead + (e.shiftKey ? 1 : 1 / fps));
     else if (e.key === "ArrowLeft") setPlayhead(playhead - (e.shiftKey ? 1 : 1 / fps));
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();

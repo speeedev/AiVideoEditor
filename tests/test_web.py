@@ -70,3 +70,14 @@ def test_path_traversal_blocked(server):
     conn = http.client.HTTPConnection(host, int(port))
     conn.request("GET", "/renders/..%2F..%2Fproject.json")
     assert conn.getresponse().status == 404
+
+
+def test_manual_edit_endpoint(server):
+    base, app = server
+    before = app.project.timeline.duration
+    status, data = post(base + "/api/edit", {"tool": "ripple_delete",
+                                             "args": {"ranges": [{"start": 1.0, "end": 2.0}], "snap_to_pauses": False}})
+    assert status == 200 and "Removed 1.00s" in data["result"]
+    assert app.project.timeline.duration == pytest.approx(before - 1.0)
+    assert post(base + "/api/edit", {"tool": "apply_layout", "args": {"start": 0, "end": 1, "layout": "nope"}})[0] == 400
+    assert post(base + "/api/edit", {"tool": "assemble_timeline", "args": {}})[0] == 400
