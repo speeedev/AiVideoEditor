@@ -37,7 +37,8 @@ def ffprobe_bin() -> str:
     return _find("ffprobe", "AVE_FFPROBE")
 
 
-def run_ffmpeg(args: Sequence[str], *, capture_stdout: bool = False) -> subprocess.CompletedProcess:
+def run_ffmpeg(args: Sequence[str], *, capture_stdout: bool = False,
+               cwd: str | os.PathLike | None = None) -> subprocess.CompletedProcess:
     """Run ffmpeg with the given arguments (without the binary name).
 
     stderr is always captured so errors can be reported; stdout is captured
@@ -48,6 +49,7 @@ def run_ffmpeg(args: Sequence[str], *, capture_stdout: bool = False) -> subproce
         cmd,
         stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        cwd=cwd,
     )
     if proc.returncode != 0:
         raise FFmpegError(cmd, proc.returncode, proc.stderr.decode("utf-8", "replace"))
