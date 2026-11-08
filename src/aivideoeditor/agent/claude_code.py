@@ -58,6 +58,8 @@ class ClaudeCodeAgent:
         self.agent_dir.mkdir(exist_ok=True)
         self.binary = claude_binary()
         self.proc: subprocess.Popen | None = None
+        self._streamed_text = False
+        self._streamed_thinking = False
 
     @property
     def session_file(self) -> Path:
@@ -71,7 +73,7 @@ class ClaudeCodeAgent:
 
     def command(self, prompt: str, resume: str | None) -> list[str]:
         assert self.binary
-        cmd = [self.binary, "-p", prompt, "--output-format", "stream-json", "--verbose",
+        cmd = [self.binary, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--mcp-config", json.dumps(mcp_config(self.session.project.root)), "--strict-mcp-config",
                "--tools", "", "--allowedTools", f"{PREFIX}*",
                "--append-system-prompt", SYSTEM_PROMPT, "--max-turns", str(self.max_turns)]
@@ -166,22 +168,39 @@ class ClaudeCodeAgent:
                 if srv.get("name") == SERVER and srv.get("status") not in (None, "connected"):
                     self.display.info(f"Editing tools server status: {srv.get('status')}")
             return None
+        if etype == "stream_event":
+            # --include-partial-messages: raw API stream events, so text appears while it is written.
+            raw = ev.get("event") or {}
+            if raw.get("type") == "content_block_delta":
+                delta = raw.get("delta") or {}
+                if delta.get("type") == "text_delta" and delta.get("text"):
+                    self._streamed_text = True
+                    self.display.text(delta["text"])
+                elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                    self._streamed_thinking = True
+                    self.display.thinking(delta["thinking"])
+            elif raw.get("type") == "content_block_stop" and (self._streamed_text or self._streamed_thinking):
+                self.display.turn_end()
+            return None
         if etype == "assistant":
             for b in (ev.get("message") or {}).get("content") or []:
                 bt = b.get("type")
                 if bt == "text" and b.get("text"):
                     texts.append(b["text"])
-                    self.display.text(b["text"])
-                    self.display.turn_end()
+                    if not self._streamed_text:       # already shown piece by piece
+                        self.display.text(b["text"])
+                        self.display.turn_end()
                 elif bt == "thinking" and b.get("thinking"):
-                    self.display.thinking(b["thinking"])
-                    self.display.turn_end()
+                    if not self._streamed_thinking:
+                        self.display.thinking(b["thinking"])
+                        self.display.turn_end()
                 elif bt == "tool_use":
                     name = str(b.get("name", ""))
                     short = name[len(PREFIX):] if name.startswith(PREFIX) else name
                     names[b.get("id", "")] = short
                     tool_calls.append(short)
                     self.display.tool_call(short, b.get("input"))
+            self._streamed_text = self._streamed_thinking = False
             return None
         if etype == "user":
             content = (ev.get("message") or {}).get("content")

@@ -93,6 +93,10 @@ FAKE_CLAUDE = textwrap.dedent('''\
                "media_type": c["mimeType"], "data": c["data"]}}}} for c in r["content"]]
     out({{"type": "user", "message": {{"content": [{{"type": "tool_result", "tool_use_id": "tu2",
           "content": content}}]}}}})
+    for piece in ("Tamam, ", "2 sn ", "kestim."):
+        out({{"type": "stream_event", "event": {{"type": "content_block_delta", "index": 0,
+              "delta": {{"type": "text_delta", "text": piece}}}}}})
+    out({{"type": "stream_event", "event": {{"type": "content_block_stop", "index": 0}}}})
     out({{"type": "assistant", "message": {{"content": [{{"type": "text", "text": "Tamam, 2 sn kestim."}}]}}}})
     out({{"type": "result", "subtype": "success", "is_error": False, "result": "Tamam, 2 sn kestim.",
           "num_turns": 3, "session_id": "sess-42", "total_cost_usd": 0.05,
@@ -149,13 +153,16 @@ def test_claude_code_backend(session, fake_claude):
     assert ("call", "ripple_delete") in rec.events and ("call", "view_timeline") in rec.events
     assert ("result", "view_timeline", False, ["text", "image"]) in rec.events
     assert reloads == ["ripple_delete", "view_timeline"]
+    streamed = [e[1] for e in rec.events if e[0] == "text"]
+    assert streamed == ["Girişi kesiyorum.", "Tamam, ", "2 sn ", "kestim."]   # live pieces, no duplicate
     assert any(e[0] == "info" and "ANTHROPIC_API_KEY" in e[1] for e in rec.events)
 
     log = json.loads(fake_claude.read_text())
     argv = log["argv"]
     assert log["has_api_key"] is False                    # never passed to Claude Code
     assert argv[0] == "-p" and "<request>" in argv[1]
-    for flag in ("--output-format", "--verbose", "--strict-mcp-config", "--append-system-prompt"):
+    for flag in ("--output-format", "--verbose", "--include-partial-messages", "--strict-mcp-config",
+                 "--append-system-prompt"):
         assert flag in argv
     assert argv[argv.index("--output-format") + 1] == "stream-json"
     assert argv[argv.index("--tools") + 1] == ""

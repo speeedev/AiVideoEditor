@@ -393,7 +393,82 @@ function showTab(which) {
 }
 
 // --------------------------------------------------------------------- chat --
+// ------------------------------------------------------------- markdown --
+// Minimal, safe Markdown for Claude's messages: everything is HTML-escaped first.
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function inlineMd(s) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/__(.+?)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function renderMd(text) {
+  const lines = text.split("\n");
+  let html = "";
+  let list = null;
+  let code = null;
+  let table = null;
+  const closeList = () => { if (list) { html += `</${list}>`; list = null; } };
+  const closeTable = () => {
+    if (!table) return;
+    const rows = table.filter((r) => !/^\s*\|?\s*:?-{2,}/.test(r));
+    html += "<table>" + rows.map((r, i) => {
+      const cells = r.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
+      const tag = i === 0 ? "th" : "td";
+      return "<tr>" + cells.map((c) => `<${tag}>${inlineMd(escapeHtml(c.trim()))}</${tag}>`).join("") + "</tr>";
+    }).join("") + "</table>";
+    table = null;
+  };
+  for (const raw of lines) {
+    if (raw.trim().startsWith("```")) {
+      if (code) { html += `<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`; code = null; }
+      else { closeList(); closeTable(); code = []; }
+      continue;
+    }
+    if (code) { code.push(raw); continue; }
+    if (raw.trim().startsWith("|")) { closeList(); (table = table || []).push(raw); continue; }
+    closeTable();
+    const line = escapeHtml(raw);
+    let m;
+    if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) {
+      if (list !== "ul") { closeList(); html += "<ul>"; list = "ul"; }
+      html += `<li>${inlineMd(m[1])}</li>`;
+      continue;
+    }
+    if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      if (list !== "ol") { closeList(); html += "<ol>"; list = "ol"; }
+      html += `<li>${inlineMd(m[1])}</li>`;
+      continue;
+    }
+    closeList();
+    if ((m = line.match(/^#{1,6}\s+(.*)$/))) { html += `<div class="md-h">${inlineMd(m[1])}</div>`; continue; }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { html += "<hr>"; continue; }
+    if (!line.trim()) { html += '<div class="md-gap"></div>'; continue; }
+    html += `<div>${inlineMd(line)}</div>`;
+  }
+  if (code) html += `<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`;
+  closeList();
+  closeTable();
+  return html;
+}
+function setMd(elm, text) {
+  elm._raw = text;
+  elm.innerHTML = renderMd(text);
+}
+
 function chatAdd(cls, text) {
+  if (cls === "assistant") {
+    const m = el("div", "msg assistant md");
+    setMd(m, text || "");
+    $("chat").appendChild(m);
+    $("chat").scrollTop = $("chat").scrollHeight;
+    $("suggestions").classList.add("hidden");
+    return m;
+  }
   const m = el("div", "msg " + cls, text);
   $("chat").appendChild(m);
   $("chat").scrollTop = $("chat").scrollHeight;
@@ -433,7 +508,7 @@ function handleEvent(ev) {
     case "agent_text":
       thinkingEl = null;
       if (!assistantEl) assistantEl = chatAdd("assistant", "");
-      assistantEl.textContent += ev.delta;
+      setMd(assistantEl, (assistantEl._raw || "") + ev.delta);
       chat.scrollTop = chat.scrollHeight;
       break;
     case "agent_thinking":

@@ -293,9 +293,23 @@ class App:
         bus = self.bus
         app = self
 
+        chat_log = self.project.root / "agent" / "ui_chat.jsonl"
+        chat_log.parent.mkdir(exist_ok=True)
+
+        def log_chat(role: str, text: str) -> None:
+            if text.strip():
+                with chat_log.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"role": role, "text": text}, ensure_ascii=False) + "\n")
+
+        log_chat("user", instruction)
+
         class WebDisplay(Display):
+            def __init__(self) -> None:
+                self.buffer = ""
+
             def text(self, delta: str) -> None:
                 if delta:
+                    self.buffer += delta
                     bus.publish({"type": "agent_text", "delta": delta})
 
             def thinking(self, delta: str) -> None:
@@ -303,9 +317,14 @@ class App:
                     bus.publish({"type": "agent_thinking", "delta": delta})
 
             def turn_end(self) -> None:
+                log_chat("assistant", self.buffer)
+                self.buffer = ""
                 bus.publish({"type": "agent_turn_end"})
 
             def tool_call(self, name: str, args: Any) -> None:
+                log_chat("assistant", self.buffer)
+                self.buffer = ""
+                log_chat("tool", name)
                 bus.publish({"type": "tool_call", "name": name, "args": args})
 
             def tool_result(self, name: str, content: Any, is_error: bool) -> None:
@@ -387,6 +406,15 @@ class App:
 
     def conversation(self) -> list[dict]:
         """Chat history (text only) for the panel."""
+        log = self.project.root / "agent" / "ui_chat.jsonl"
+        if log.exists():
+            out = []
+            for line in log.read_text(encoding="utf-8").splitlines():
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            return out
         f = self.project.root / "agent" / "conversation.json"
         if not f.exists():
             return []
