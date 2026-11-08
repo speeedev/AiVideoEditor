@@ -62,8 +62,9 @@ class AgentResult:
 class AgentContext:
     """State shared with tool handlers."""
 
-    def __init__(self, session: EditorSession):
+    def __init__(self, session: EditorSession, lock: Any = None):
         self.session = session
+        self.lock = lock  # optional; held while a tool changes the timeline
         self.last_render: Path | None = None
 
     def overview(self) -> str:
@@ -133,9 +134,10 @@ class EditAgent:
         display: Display | None = None,
         use_fallbacks: bool = True,
         max_tokens: int = 64000,
+        lock: Any = None,
     ):
         self.session = session
-        self.ctx = AgentContext(session)
+        self.ctx = AgentContext(session, lock)
         self.model = model
         self.effort = effort
         self.max_turns = max_turns

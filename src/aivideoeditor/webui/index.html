@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Video Editor</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">AVE <span id="projectName" class="muted"></span></div>
+  <div class="actions">
+    <button id="btnAnalyze" title="Transkript, sessizlik ve görsel analiz">Analiz</button>
+    <button id="btnSync" title="Kayıtları sese göre senkronla">Senkron</button>
+    <button id="btnAssemble" title="Timeline'ı senkronlu kayıtlardan yeniden kur">Timeline kur</button>
+    <span class="sep"></span>
+    <button id="btnUndo" title="Geri al (Ctrl+Z)">↶ Geri</button>
+    <button id="btnRedo" title="Yinele (Ctrl+Shift+Z)">↷ İleri</button>
+    <span class="sep"></span>
+    <button id="btnPreview" class="primary" title="Düşük çözünürlüklü hızlı render">Ön izleme render</button>
+    <button id="btnFinal" title="Tam kalite render">Final render</button>
+    <select id="exportFormat" title="Diğer editörlere aktar">
+      <option value="">Dışa aktar…</option>
+      <option value="xml">Premiere / Resolve (FCP7 XML)</option>
+      <option value="otio">OpenTimelineIO</option>
+      <option value="edl">EDL</option>
+      <option value="json">Timeline JSON</option>
+    </select>
+  </div>
+  <div class="status"><span id="jobSpinner" class="spinner hidden"></span><span id="statusText" class="muted">Hazır</span>
+    <div id="progress" class="progress hidden"><div></div></div></div>
+</header>
+
+<main class="layout">
+  <aside class="panel left">
+    <section>
+      <h3>Proje özeti <span class="muted small">(Claude bunu okur)</span></h3>
+      <textarea id="brief" rows="4" placeholder="Videonun amacı, hedef kitle, üslup, hedef süre… Örn: 8-10 dakikalık YouTube eğitimi, samimi anlatım, gereksiz beklemeler kesilsin."></textarea>
+    </section>
+    <section>
+      <h3>Kayıtlar</h3>
+      <div id="assets" class="assets"></div>
+      <div id="drop" class="drop">
+        <div>Dosyaları buraya sürükle</div>
+        <div class="row">
+          <select id="uploadRole"></select>
+          <label class="button small">Dosya seç<input id="fileInput" type="file" multiple hidden></label>
+        </div>
+        <div class="row">
+          <input id="pathInput" placeholder="veya yerel dosya yolu (kopyalanmaz)">
+          <button id="btnAddPath" class="small">Ekle</button>
+        </div>
+      </div>
+    </section>
+    <section>
+      <h3>Analiz ayarları</h3>
+      <div class="row"><label>Dil</label>
+        <select id="anLang"><option value="tr">Türkçe</option><option value="en">English</option><option value="">Otomatik</option></select></div>
+      <div class="row"><label>Whisper</label>
+        <select id="anModel"><option>tiny</option><option>base</option><option selected>small</option><option>medium</option><option>large-v3</option></select></div>
+      <div class="row"><label><input id="anTranscribe" type="checkbox" checked> Transkript çıkar</label></div>
+    </section>
+  </aside>
+
+  <section class="center">
+    <div class="viewer">
+      <div class="viewer-tabs">
+        <button id="tabFrame" class="tab active">Kare</button>
+        <button id="tabVideo" class="tab">Ön izleme videosu</button>
+        <select id="renderSelect" class="hidden"></select>
+        <span class="grow"></span>
+        <span id="timecode" class="mono">00:00.00 / 00:00.00</span>
+      </div>
+      <div class="viewer-body">
+        <img id="frame" alt="">
+        <video id="video" controls class="hidden"></video>
+        <div id="viewerEmpty" class="empty">Kayıt ekle → Analiz → Senkron → Claude'a talimat ver</div>
+      </div>
+    </div>
+    <div class="timeline">
+      <div class="tl-toolbar">
+        <button id="tlFit" class="small">Sığdır</button>
+        <label class="small muted">Yakınlaştır</label>
+        <input id="tlZoom" type="range" min="2" max="400" value="40">
+        <span class="grow"></span>
+        <span id="tlInfo" class="muted small"></span>
+      </div>
+      <div id="tlScroll" class="tl-scroll">
+        <div id="tlInner" class="tl-inner">
+          <div id="ruler" class="ruler"></div>
+          <div id="tracks"></div>
+          <div id="playhead" class="playhead"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel right">
+    <div class="chat-head">
+      <h3>Claude</h3>
+      <select id="model">
+        <option value="claude-opus-5-5">Opus 5.5</option>
+        <option value="claude-sonnet-5-5">Sonnet 5.5</option>
+        <option value="claude-fable-5-1">Fable 5.1</option>
+      </select>
+      <select id="effort" title="Düşünme derinliği">
+        <option value="medium">medium</option><option value="high">high</option>
+        <option value="xhigh">xhigh</option><option value="max">max</option><option value="low">low</option>
+      </select>
+    </div>
+    <div id="chat" class="chat"></div>
+    <div class="suggestions" id="suggestions">
+      <button>Sessizlikleri, hataları ve tekrarları temizle; akıcı bir kurgu yap</button>
+      <button>Ekran kaydında okunması zor yerlere zoom ekle, boş beklemeleri hızlandır</button>
+      <button>Kelime vurgulu altyazı ekle ve girişe başlık koy</button>
+      <button>En ilgi çekici bölümden 60 saniyelik dikey kısa video hazırla</button>
+    </div>
+    <div class="composer">
+      <textarea id="prompt" rows="3" placeholder="Claude'a ne yapmasını istediğini yaz… (Enter gönderir, Shift+Enter yeni satır)"></textarea>
+      <div class="row">
+        <label class="small"><input id="newConv" type="checkbox"> Yeni sohbet</label>
+        <span class="grow"></span>
+        <button id="send" class="primary">Gönder</button>
+      </div>
+    </div>
+  </aside>
+</main>
+<div id="lightbox" class="lightbox hidden"><img alt=""></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

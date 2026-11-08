@@ -765,6 +765,18 @@ def run_tool(ctx, name: str, raw_input: Any) -> tuple[ToolOutput, bool]:
         errs = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:8])
         return f"Invalid input for {name}: {errs}", True
     session = ctx.session
+    lock = getattr(ctx, "lock", None) if spec.mutates else None
+    if lock is not None:
+        lock.acquire()
+    try:
+        return _execute(ctx, spec, args, name)
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def _execute(ctx, spec: ToolSpec, args: BaseModel, name: str) -> tuple[ToolOutput, bool]:
+    session = ctx.session
     if spec.mutates:
         session.checkpoint(name)
     try:
