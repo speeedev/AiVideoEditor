@@ -29,7 +29,8 @@ class ToolSpec:
     description: str
     model: type[BaseModel]
     handler: Callable[[Any, Any], ToolOutput]
-    mutates: bool
+    mutates: bool             # snapshot before, validate + save after, roll back on failure
+    locks: bool = False       # changes the timeline without a snapshot (undo)
 
     def definition(self, *, eager: bool = True) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -45,10 +46,11 @@ class ToolSpec:
 REGISTRY: dict[str, ToolSpec] = {}
 
 
-def tool(name: str, model: type[BaseModel], *, mutates: bool = False):
+def tool(name: str, model: type[BaseModel], *, mutates: bool = False, locks: bool = False):
     def deco(fn: Callable[[Any, Any], ToolOutput]):
         doc = (fn.__doc__ or "").strip()
-        REGISTRY[name] = ToolSpec(name, " ".join(line.strip() for line in doc.splitlines()), model, fn, mutates)
+        REGISTRY[name] = ToolSpec(name, " ".join(line.strip() for line in doc.splitlines()), model, fn,
+                                  mutates, locks or mutates)
         return fn
     return deco
 
@@ -297,6 +299,11 @@ class SetCanvasIn(BaseModel):
     width: int | None = Field(None, ge=128, le=7680, description="custom only")
     height: int | None = Field(None, ge=128, le=7680, description="custom only")
     fps: float | None = Field(None, ge=10, le=120, description="Frame rate (default: keep)")
+
+
+class SaveTextIn(BaseModel):
+    filename: str = Field(description="File name such as 'youtube-description.md' or 'chapters.txt'")
+    content: str = Field(min_length=1)
 
 
 class AddMarkerIn(BaseModel):
@@ -811,6 +818,20 @@ def set_canvas(ctx, args: SetCanvasIn) -> ToolOutput:
     return f"Canvas is now {w}x{h} @ {tl.canvas.fps:g} fps."
 
 
+@tool("save_text", SaveTextIn)
+def save_text(ctx, args: SaveTextIn) -> ToolOutput:
+    """Save a text deliverable next to the renders: YouTube title/description, chapter list with timestamps of
+    the final edit, social post, notes for the editor. Saved under the project's exports/ folder."""
+    import re
+    name = re.sub(r"[^\w.\-]+", "_", Path(args.filename).name).strip("._") or "notes.txt"
+    if not name.lower().endswith((".txt", ".md", ".srt", ".vtt", ".json", ".csv")):
+        name += ".txt"
+    out = ctx.session.project.root / "exports" / name
+    out.parent.mkdir(exist_ok=True)
+    out.write_text(args.content, encoding="utf-8")
+    return f"Saved {out}"
+
+
 @tool("add_marker", AddMarkerIn, mutates=True)
 def add_marker(ctx, args: AddMarkerIn) -> ToolOutput:
     """Leave a note for the human editor at a timeline time (something to review, a missing asset, etc.)."""
@@ -827,7 +848,7 @@ def assemble_timeline(ctx, args: AssembleIn) -> ToolOutput:
     return "Timeline rebuilt from the synced recordings.\n" + describe_timeline(ctx.session.timeline)
 
 
-@tool("undo", UndoIn)
+@tool("undo", UndoIn, locks=True)
 def undo(ctx, args: UndoIn) -> ToolOutput:
     """Undo the last edit(s)."""
     done = 0
@@ -876,7 +897,7 @@ def run_tool(ctx, name: str, raw_input: Any) -> tuple[ToolOutput, bool]:
         errs = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:8])
         return f"Invalid input for {name}: {errs}", True
     session = ctx.session
-    lock = getattr(ctx, "lock", None) if spec.mutates else None
+    lock = getattr(ctx, "lock", None) if spec.locks else None
     if lock is not None:
         lock.acquire()
     try:

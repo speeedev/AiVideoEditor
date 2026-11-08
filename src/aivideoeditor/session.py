@@ -92,10 +92,14 @@ class EditorSession:
         return words_on_timeline(self.timeline, aid, tr)
 
     def caption_words(self) -> list[TimelineWord] | None:
+        """Words to caption: only those that are actually heard (skips muted / sped-up parts)."""
         cap = self.timeline.captions
         if not cap.enabled:
             return None
-        return self.words(cap.source_asset)
+        audible: dict[str, bool] = {}
+        for t, c in self.timeline.all_clips():
+            audible[c.id] = not t.muted and t.volume > 0 and c.volume > 0
+        return [w for w in self.words(cap.source_asset) if audible.get(w.clip_id, True)]
 
     # -- rendering ----------------------------------------------------------
     def render(self, *, preview: bool = True, name: str | None = None, progress=None,

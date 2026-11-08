@@ -108,7 +108,8 @@ Diğer komutlar:
 | `ave add PROJE kayit.mkv --role mic --audio-stream 1` | çok track'li kayıttan (ör. OBS) belirli ses track'ini kullanır |
 | `ave still PROJE 12.5 -o kare.jpg` | timeline'ın tek karesini render eder |
 | `ave undo PROJE [--steps N]` | son değişiklikleri geri alır |
-| `ave export PROJE --format xml\|otio\|edl\|json` | diğer editörlere aktarır |
+| `ave export PROJE --format xml\|otio\|edl\|json\|srt` | diğer editörlere aktarır / altyazı dosyası üretir |
+| `ave status PROJE` | projenin durumu ve sıradaki adım |
 | `ave brief PROJE "metin"` | proje özetini ayarlar |
 
 Model ve düşünme derinliği: `--model claude-opus-5-5` (varsayılan) ve `--effort low|medium|high|xhigh|max`
@@ -134,6 +135,8 @@ Model ve düşünme derinliği: `--model claude-opus-5-5` (varsayılan) ve `--ef
 | `place_clip`, `move_clip`, `trim_clip`, `split`, `lift`, `delete_clips`, `set_clip_properties` | klip düzeyinde ince ayar |
 | `set_track` | sessize alma, gizleme, kilitleme, ducking, **gürültü azaltma** ve **ses iyileştirme** |
 | `add_marker` | insan editöre not |
+| `set_canvas` | çıktı boyutu: yatay 1080p/4K, dikey 1080×1920 (Shorts/Reels), kare |
+| `save_text` | YouTube başlığı, açıklama, bölüm (chapter) listesi gibi metinleri `exports/` altına kaydeder |
 | `undo`, `render_preview`, `assemble_timeline` | geri alma, ön izleme, baştan kurma |
 
 Başarısız bir araç çağrısı hiçbir şeyi değiştirmez. Her değişiklik `history/` klasörüne kaydedilir, bu
@@ -144,6 +147,7 @@ yüzden farklı çalıştırmalar arasında da geri alınabilir.
 - **FCP7 XML (`xml`):** Premiere Pro, DaVinci Resolve ve Final Cut içe aktarır.
 - **OpenTimelineIO (`otio`):** Resolve 18+ ve pek çok iş akışı.
 - **EDL:** tek video ve tek ses track'i (CMX3600).
+- **SRT:** kurgulanmış videonun altyazı dosyası (YouTube'a ayrı altyazı olarak yüklemek için).
 
 Kesimler, track yerleşimi, hız ve ses seviyeleri aktarılır. Layout kutuları, zoom, yazılar ve altyazı bu
 programın kendi render motoruna özgüdür, aktarılmaz. Bunlar için videoyu render et ya da NLE'de yeniden

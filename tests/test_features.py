@@ -118,3 +118,26 @@ def test_second_audio_stream(session, tmp_path, demo_media):
     assert not on_noise.reliable
     res = sync_project(p, log=lambda m: None)
     assert abs(res[a.id].offset) < 0.03      # same clock as the mic
+
+
+def test_captions_skip_muted_parts_and_srt(session, tmp_path):
+    from aivideoeditor.export import export_timeline
+    from aivideoeditor.timeline import ops
+    tl = session.timeline
+    all_words = session.words()
+    ops.speed_range(tl, 2.0, 6.0, 4)          # muted fast-forward
+    ops.set_captions(tl, enabled=True, source_asset="mic")
+    session.commit()
+    heard = session.caption_words()
+    assert 0 < len(heard) < len(all_words)
+    assert not any(2.0 <= w.start < 3.0 for w in heard)
+    srt = export_timeline(session.project, "srt", tmp_path / "x.srt").read_text()
+    assert srt.startswith("1\n00:00:") and "-->" in srt
+
+
+def test_save_text_tool(session):
+    ctx = NS(session=session)
+    out, err = run_tool(ctx, "save_text", {"filename": "../../evil chapters", "content": "00:00 Giriş"})
+    assert not err
+    saved = session.project.root / "exports" / "evil_chapters.txt"
+    assert saved.read_text(encoding="utf-8") == "00:00 Giriş"

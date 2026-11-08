@@ -474,9 +474,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--steps", type=int, default=1)
     p.set_defaults(func=cmd_undo)
 
-    p = sub.add_parser("export", help="export the timeline for other editors (OTIO, FCP7 XML, EDL)")
+    p = sub.add_parser("export", help="export the timeline (FCP7 XML, OTIO, EDL) or subtitles (SRT)")
     p.add_argument("project")
-    p.add_argument("--format", choices=["otio", "xml", "edl", "json"], default="xml")
+    p.add_argument("--format", choices=["otio", "xml", "edl", "json", "srt"], default="xml")
     p.add_argument("-o", "--output")
     p.set_defaults(func=cmd_export)
 

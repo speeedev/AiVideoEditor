@@ -4,6 +4,7 @@
 * ``otio`` - OpenTimelineIO JSON (DaVinci Resolve 18+, many pipelines).
 * ``edl``  - CMX3600 EDL of the bottom video track and the main audio track.
 * ``json`` - this tool's own timeline JSON.
+* ``srt``  - subtitles of the edited video (from the transcript), for platforms that take caption files.
 
 Cuts, track placement, speed and volume are exported. Layout boxes, zooms,
 text overlays and captions are specific to this tool's renderer and are
@@ -230,9 +231,40 @@ def to_edl(tl: Timeline, project: "Project") -> str:
     return "\n".join(lines)
 
 
+def _srt_ts(t: float) -> str:
+    ms = int(round(max(t, 0.0) * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def to_srt(project: "Project") -> str:
+    """Subtitles of the edited timeline (for uploading as a separate caption track)."""
+    from .render.captions import group_words
+    from .session import EditorSession
+    from .timeline.model import Captions
+    session = EditorSession(project)
+    cfg = project.timeline.captions
+    words = session.caption_words() if cfg.enabled else None
+    if words is None:
+        cfg = Captions(enabled=True, source_asset=cfg.source_asset)
+        project.timeline.captions, original = cfg, project.timeline.captions
+        try:
+            words = session.caption_words() or []
+        finally:
+            project.timeline.captions = original
+    lines = group_words(words, cfg.model_copy(update={"max_words": max(cfg.max_words, 8)}))
+    out = []
+    for i, ln in enumerate(lines, start=1):
+        text = " ".join(w.text for w in ln.words)
+        out.append(f"{i}\n{_srt_ts(ln.start)} --> {_srt_ts(ln.end)}\n{text}\n")
+    return "\n".join(out)
+
+
 def export_timeline(project: "Project", fmt: str, output: str | None = None) -> Path:
     tl = project.timeline
-    ext = {"xml": ".xml", "otio": ".otio", "edl": ".edl", "json": ".json"}[fmt]
+    ext = {"xml": ".xml", "otio": ".otio", "edl": ".edl", "json": ".json", "srt": ".srt"}[fmt]
     out = Path(output) if output else project.root / "exports" / f"{project.data.name}{ext}"
     out.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "xml":
@@ -241,6 +273,8 @@ def export_timeline(project: "Project", fmt: str, output: str | None = None) -> 
         out.write_text(json.dumps(to_otio(tl, project), indent=2), encoding="utf-8")
     elif fmt == "edl":
         out.write_text(to_edl(tl, project), encoding="utf-8")
+    elif fmt == "srt":
+        out.write_text(to_srt(project), encoding="utf-8")
     else:
         out.write_text(tl.model_dump_json(indent=2), encoding="utf-8")
     return out.resolve()
