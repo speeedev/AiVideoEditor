@@ -82,6 +82,7 @@
       </div>
       <div class="viewer-body">
         <img id="frame" alt="">
+        <canvas id="live" class="hidden"></canvas>
         <video id="video" controls class="hidden"></video>
         <div id="viewerEmpty" class="empty">Kayıt ekle → Analiz → Senkron → Claude'a talimat ver</div>
       </div>
@@ -207,6 +208,8 @@
   <p class="small muted">Değişiklikler ön izleme karesinde hemen görünür.</p>
 </div>
 <div id="lightbox" class="lightbox hidden"><img alt=""></div>
+<div id="mediaPool" class="hidden"></div>
+<script src="/static/player.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

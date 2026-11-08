@@ -24,8 +24,9 @@ from typing import TYPE_CHECKING, Protocol
 
 from ..media.ffmpeg import run_ffmpeg
 from ..timeline.mapping import TimelineWord
-from ..timeline.model import AudioMaster, Clip, Timeline, Track
+from ..timeline.model import AudioMaster, Clip, TextOverlay, Timeline, Track
 from .captions import build_ass
+from .titles import animation_duration, render_text_image
 
 if TYPE_CHECKING:  # pragma: no cover
     from .textlayer import TextLayer
@@ -168,6 +169,11 @@ def _fade_windows(tl: Timeline, fps: float) -> list[tuple[int, int]]:
                 out.append((cf0, cf0 + math.ceil(c.fade_in * fps)))
             if c.fade_out > 0:
                 out.append((cf1 - math.ceil(c.fade_out * fps), cf1))
+    for x in tl.texts:
+        d = animation_duration(x)
+        if d > 0:
+            out.append((round(x.start * fps), round(x.start * fps) + math.ceil(d * fps)))
+            out.append((round(x.end * fps) - math.ceil(d * fps), round(x.end * fps)))
     return out
 
 
@@ -348,19 +354,9 @@ def _audio_chain(seg: Segment, chunk_t0: float) -> str:
     return ",".join(filters)
 
 
-def _font_file() -> Path | None:
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-        "/Library/Fonts/Arial Bold.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/segoeuib.ttf",
-    ]
-    for c in candidates:
-        if Path(c).exists():
-            return Path(c)
-    return None
+def _text_key(x: TextOverlay) -> str:
+    import hashlib
+    return hashlib.sha1(x.model_dump_json().encode("utf-8")).hexdigest()[:10]
 
 
 def build_chunk(
@@ -422,6 +418,18 @@ def build_chunk(
             else:
                 seg.audio_input = add_input(seg, asset.path, is_image)
 
+    text_inputs: list[tuple[TextOverlay, int]] = []
+    if want_video:
+        for x in tl.texts:
+            if x.end <= t0 or x.start >= t0 + dur:
+                continue
+            png = workdir / f"text_{x.id}_{st.width}x{st.height}_{_text_key(x)}.png"
+            if not png.exists():
+                render_text_image(x, st.width, st.height).save(png, compress_level=1)
+            args += ["-loop", "1", "-framerate", fps, "-t", f"{dur + 0.5:.6f}", "-i", png.name]
+            text_inputs.append((x, n_inputs))
+            n_inputs += 1
+
     layer_input = None
     if text_layer is not None and want_video:
         name = text_layer.concat_list(t0, t0 + dur, f"textlayer_{chunk.f0}_{chunk.f1}.txt")
@@ -445,30 +453,30 @@ def build_chunk(
                 graph.append(f"[{cur}][v{k}]overlay=x={x}:y={y}:eof_action=pass:format=auto[o{k}]")
                 cur = f"o{k}"
                 k += 1
+        for j, (x, idx) in enumerate(text_inputs):
+            ts, te = x.start - t0, x.end - t0
+            d = animation_duration(x)
+            chain = ["format=rgba"]
+            if d > 0 and ts >= 0:
+                chain.append(f"fade=t=in:st={ts:.4f}:d={d:.4f}:alpha=1")
+            if d > 0 and te <= dur + 1e-6:
+                chain.append(f"fade=t=out:st={max(0.0, te - d):.4f}:d={d:.4f}:alpha=1")
+            chain.append("setpts=PTS-STARTPTS")
+            graph.append(f"[{idx}:v:0]{','.join(chain)}[t{j}]")
+            ox, oy = "0", "0"
+            if x.animation == "slide_up" and d > 0:
+                oy = f"'if(lt(t,{ts + d:.4f}),max(0,1-(t-{ts:.4f})/{d:.4f})*main_h*0.05,0)'"
+            elif x.animation == "slide_left" and d > 0:
+                ox = f"'if(lt(t,{ts + d:.4f}),max(0,1-(t-{ts:.4f})/{d:.4f})*main_w*0.05,0)'"
+            graph.append(f"[{cur}][t{j}]overlay=x={ox}:y={oy}:format=auto:"
+                         f"enable='between(t,{ts:.4f},{te:.4f})'[ot{j}]")
+            cur = f"ot{j}"
         if layer_input is not None:
-            # Titles/captions drawn by Pillow: one image per text state, timed by the concat list.
+            # Captions drawn by Pillow: one image per caption state, timed by the concat list.
             graph.append(f"[{layer_input}:v:0]format=rgba,setpts=PTS-STARTPTS[txt]")
             graph.append(f"[{cur}][txt]overlay=0:0:format=auto[otxt]")
             cur = "otxt"
         post = [f"setpts=PTS+{t0:.6f}/TB"]
-        font = _font_file()
-        if text_layer is None and font is not None and tl.texts:
-            local_font = workdir / ("font" + font.suffix)
-            if not local_font.exists():
-                shutil.copyfile(font, local_font)
-        for x in ([] if text_layer is not None else tl.texts):
-            if x.end <= t0 or x.start >= t0 + dur:
-                continue
-            (workdir / f"text_{x.id}.txt").write_text(x.text, encoding="utf-8")
-            size = max(8, int(round(x.size * st.height)))
-            opts = [f"textfile=text_{x.id}.txt", "expansion=none", f"fontsize={size}",
-                    f"fontcolor={x.color}", f"x=w*{x.x:.4f}-text_w/2", f"y=h*{x.y:.4f}-text_h/2",
-                    f"enable='between(t,{x.start:.3f},{x.end:.3f})'"]
-            if font is not None:
-                opts.insert(0, "fontfile=font" + font.suffix)
-            if x.box:
-                opts += ["box=1", f"boxcolor={x.box_color}", f"boxborderw={max(4, size // 3)}"]
-            post.append("drawtext=" + ":".join(opts))
         if captions_file:
             post.append(f"ass={captions_file}")
         post += ["setpts=PTS-STARTPTS", "format=yuv420p"]
@@ -596,8 +604,8 @@ def loudnorm_filter(wav: Path, target: AudioMaster) -> str | None:
 
 def _text_layer(tl: Timeline, words: list[TimelineWord] | None, st: RenderSettings,
                 workdir: Path) -> "TextLayer | None":
-    """A Pillow text layer when this FFmpeg cannot draw text itself (and there is text to draw)."""
-    if not (tl.texts or (tl.captions.enabled and words)):
+    """A Pillow caption layer when this FFmpeg cannot draw subtitles itself (libass)."""
+    if not (tl.captions.enabled and words):
         return None
     from .textlayer import TextLayer, use_pillow_text
     if not use_pillow_text():

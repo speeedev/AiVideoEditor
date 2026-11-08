@@ -40,8 +40,8 @@ def _filters(binary: str) -> frozenset[str]:
 
 
 def ffmpeg_can_draw_text() -> bool:
-    filters = _filters(ffmpeg_bin())
-    return "drawtext" in filters and "ass" in filters
+    """Can this FFmpeg burn subtitles (libass)? Titles never need FFmpeg text filters."""
+    return "ass" in _filters(ffmpeg_bin())
 
 
 def use_pillow_text() -> bool:
@@ -110,7 +110,7 @@ class TextLayer:
         self.tl = tl
         self.width, self.height = width, height
         self.workdir = Path(workdir)
-        self.texts = {x.id: x for x in tl.texts}
+        self.texts: dict = {}          # titles are separate image overlays (render/titles.py)
         self.events: list[CaptionEvent] = caption_events(words, tl.captions) if (tl.captions.enabled and words) else []
         self.spans = self._spans()
         self._files: dict[_State, str] = {}
@@ -122,8 +122,6 @@ class TextLayer:
     def _spans(self) -> list[tuple[float, float, _State]]:
         total = max(self.tl.duration, 0.0)
         cuts = {0.0, total}
-        for x in self.tl.texts:
-            cuts.update((min(max(x.start, 0.0), total), min(max(x.end, 0.0), total)))
         for ev in self.events:
             cuts.update((min(max(ev.start, 0.0), total), min(max(ev.end, 0.0), total)))
         points = sorted(cuts)
@@ -132,7 +130,7 @@ class TextLayer:
             if b - a <= 1e-6:
                 continue
             mid = (a + b) / 2
-            texts = tuple(x.id for x in self.tl.texts if x.start <= mid < x.end)
+            texts: tuple[str, ...] = ()
             cap = next((i for i in range(len(self.events) - 1, -1, -1)
                         if self.events[i].start <= mid < self.events[i].end), None)
             st = _State(texts, cap)

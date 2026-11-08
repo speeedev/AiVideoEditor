@@ -129,3 +129,29 @@ def test_pillow_text_layer_when_ffmpeg_cannot_draw_text(session, tmp_path, monke
     reds = sum(1 for x in range(w) for y in range(int(h * 0.05), int(h * 0.25))
                if (lambda p: p[0] > 180 and p[1] < 90 and p[2] < 90)(still.getpixel((x, y))))
     assert reds > 50                                            # the red title is on the frame
+
+
+def test_title_templates_render_and_animate(session, tmp_path):
+    from PIL import Image
+    from aivideoeditor.render.titles import render_text_image
+    from aivideoeditor.timeline.model import TextOverlay
+    for style in ("plain", "title", "lower_third", "badge", "end_card"):
+        img = render_text_image(TextOverlay(id="t", start=0, end=3, text="Başlık", subtitle="alt satır",
+                                            style=style, x=0.3, y=0.5, size=0.08), 320, 180)
+        assert img.size == (320, 180) and img.getbbox() is not None, style
+    tl = session.timeline
+    ops.add_text(tl, 1.0, 4.0, "SLIDE", style="badge", accent="#FF0000", animation="slide_up", x=0.5, y=0.5,
+                 size=0.12, color="#FFFFFF")
+    session.commit()
+    st = RenderSettings.for_timeline(tl, preview=True, preview_width=320)
+    st.max_inputs = 3
+    out = render_timeline(tl, session.project.assets, tmp_path / "t.mp4", st)
+    assert int(_probe(out)["video"]["nb_read_frames"]) == round(tl.duration * 30)
+
+    def red_rows(t):
+        im = Image.open(session.still(t, width=320)).convert("RGB")
+        w, h = im.size
+        rows = [y for y in range(h) if (lambda p: p[0] > 170 and p[1] < 80 and p[2] < 80)(im.getpixel((w // 2 - 30, y)))]
+        return rows
+    settled, early = red_rows(2.5), red_rows(1.1)
+    assert settled and early and min(early) > min(settled)          # still sliding up at the start

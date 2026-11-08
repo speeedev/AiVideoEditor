@@ -110,8 +110,8 @@ function renderAll() {
   updatePlayButton();
   const empty = !S.timeline.tracks.length;
   $("viewerEmpty").classList.toggle("hidden", !empty);
-  $("frame").classList.toggle("hidden", empty || !$("tabFrame").classList.contains("active"));
-  if (!empty && $("tabFrame").classList.contains("active")) requestStill();
+  $("frame").classList.toggle("hidden", empty || Live.playing || !$("tabFrame").classList.contains("active"));
+  if (!empty && !Live.playing && $("tabFrame").classList.contains("active")) requestStill();
 }
 function setBusy(job) {
   const busy = !!job;
@@ -403,6 +403,10 @@ function setPlayhead(t, noStill) {
   playhead = Math.max(0, Math.min(t, Math.max(0, S.duration - 0.001)));
   $("playhead").style.left = `${playhead * pps}px`;
   $("timecode").textContent = `${tc(playhead)} / ${tc(S.duration)}`;
+  if (Live.playing) {
+    if (!noStill) liveSeek(playhead);        // clicked on the timeline while playing
+    return;
+  }
   if (!$("video").classList.contains("hidden")) {
     if (Math.abs($("video").currentTime - playhead) > 0.05) $("video").currentTime = playhead;
   } else if (!noStill) requestStill();
@@ -429,39 +433,18 @@ function renderRenders() {
   if (cur && S.renders.includes(cur)) sel.value = cur;
 }
 // ------------------------------------------------------------- playback --
-// The edit is played from a rendered preview; when the edit changed since the last
-// render, a fast preview is rendered first and playback starts when it is ready.
-let playAfterRender = false;
-function playFrom(file) {
-  $("renderSelect").value = file;
-  showTab("video");
-  const v = $("video");
-  const start = () => {
-    v.currentTime = Math.min(playhead, Math.max(0, (v.duration || S.duration) - 0.05));
-    v.play().catch(() => {});
-  };
-  if (v.readyState >= 1 && v.src.endsWith(encodeURIComponent(file))) start();
-  else v.addEventListener("loadedmetadata", start, { once: true });
-}
+// Play / pause runs the live preview (player.js); rendered files play in the "Ön izleme videosu" tab.
 const togglePlay = guard(async () => {
-  const v = $("video");
-  if (!v.classList.contains("hidden") && !v.paused) { v.pause(); return; }
-  if (!S || !S.timeline.tracks.length) { status("Önce timeline'a bir kayıt ekle", true); return; }
-  if (S.current_render) { playFrom(S.current_render); return; }
-  if (S.job) { status(`${S.job} bitince tekrar dene`, true); return; }
-  playAfterRender = true;
-  status("Ön izleme hazırlanıyor, hazır olunca oynatılacak…");
-  await api("/api/render", { preview: true });
+  if (Live.playing) liveStop();
+  else await liveStart();
 });
 function updatePlayButton() {
-  const v = $("video");
-  const playing = !v.classList.contains("hidden") && !v.paused;
-  $("btnPlay").textContent = playing ? "⏸ Durdur" : "▶ Oynat";
-  $("btnPlay").title = playing ? "Durdur (Boşluk)"
-    : S && S.current_render ? "Oynat (Boşluk)" : "Oynat (Boşluk) — önce hızlı bir ön izleme render alınır";
+  $("btnPlay").textContent = Live.playing ? "⏸ Durdur" : "▶ Oynat";
+  $("btnPlay").title = Live.playing ? "Durdur (Boşluk)" : "Oynat (Boşluk)";
 }
 
 function showTab(which) {
+  if (Live.playing) liveStop();
   const video = which === "video";
   $("tabFrame").classList.toggle("active", !video);
   $("tabVideo").classList.toggle("active", video);
@@ -586,17 +569,14 @@ function handleEvent(ev) {
       setBusy(null);
       $("progress").classList.add("hidden");
       if (ev.status === "error") {
-        if (ev.name === "render") playAfterRender = false;
         status(`${ev.name}: ${ev.error}`, true);
         if (ev.name === "agent") chatAdd("error", ev.error);
       } else {
         status(`${ev.name} tamamlandı`);
         if (ev.name === "render" && ev.result) {
-          const play = playAfterRender;
-          playAfterRender = false;
           refresh().then(() => {
-            if (play) playFrom(ev.result.file);
-            else { $("renderSelect").value = ev.result.file; showTab("video"); }
+            $("renderSelect").value = ev.result.file;
+            showTab("video");
             if (ev.result.file.startsWith("final-")) status(`Final video hazır: ${ev.result.file} — “⬇ İndir” ile kaydet`);
           });
         }
@@ -887,7 +867,7 @@ function wire() {
     } else return;
     e.preventDefault();
   });
-  window.addEventListener("resize", () => { if (S) renderTimeline(); });
+  window.addEventListener("resize", () => { if (S && S.project) { renderTimeline(); if (Live.playing) sizeCanvas(); } });
 
   const es = new EventSource("/api/events");
   es.onmessage = (e) => handleEvent(JSON.parse(e.data));

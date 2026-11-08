@@ -262,15 +262,27 @@ class AddMusicIn(BaseModel):
     fade_out: float = Field(2.5, ge=0)
 
 
+TextStyle = Literal["plain", "title", "lower_third", "badge", "end_card"]
+TextAnimation = Literal["none", "fade", "slide_up", "slide_left"]
+
+
 class AddTextIn(BaseModel):
     start: float
     end: float
     text: str = Field(min_length=1)
-    position: Literal["top", "center", "bottom", "lower_third"] = "top"
-    x: float | None = Field(None, ge=0, le=1, description="Custom centre x (overrides position)")
-    y: float | None = Field(None, ge=0, le=1, description="Custom centre y (overrides position)")
-    size: float = Field(0.06, gt=0.01, le=0.3, description="Font size as a fraction of canvas height")
+    style: TextStyle = Field("plain", description="plain: text (with optional box); title: large centred title "
+                                                 "with shadow; lower_third: name strap at lower left (accent bar, "
+                                                 "subtitle); badge: small rounded label; end_card: darkened frame "
+                                                 "with centred title")
+    subtitle: str = Field("", description="Second line for title / lower_third / end_card")
+    animation: TextAnimation = Field("fade", description="How it appears and disappears")
+    position: Literal["top", "center", "bottom", "lower_third"] | None = Field(
+        None, description="plain style placement (default: top); other styles have their own defaults")
+    x: float | None = Field(None, ge=0, le=1, description="Custom x: centre, or the left edge for lower_third")
+    y: float | None = Field(None, ge=0, le=1, description="Custom centre y")
+    size: float | None = Field(None, gt=0.01, le=0.3, description="Font size as a fraction of canvas height")
     color: str = "white"
+    accent: str = Field("#3B82F6", description="Accent colour (lower_third bar, badge), #RRGGBB")
     box: bool = True
 
 
@@ -279,10 +291,14 @@ class UpdateTextIn(BaseModel):
     start: float | None = None
     end: float | None = None
     text: str | None = None
+    style: TextStyle | None = None
+    subtitle: str | None = None
+    animation: TextAnimation | None = None
     x: float | None = Field(None, ge=0, le=1)
     y: float | None = Field(None, ge=0, le=1)
     size: float | None = Field(None, gt=0.01, le=0.3)
     color: str | None = None
+    accent: str | None = None
     box: bool | None = None
 
 
@@ -956,16 +972,23 @@ def add_music(ctx, args: AddMusicIn) -> ToolOutput:
 
 
 POSITIONS = {"top": (0.5, 0.1), "center": (0.5, 0.5), "bottom": (0.5, 0.82), "lower_third": (0.3, 0.78)}
+# Default (x, y, size) per text style.
+STYLE_DEFAULTS = {"plain": (0.5, 0.1, 0.06), "title": (0.5, 0.45, 0.09), "lower_third": (0.05, 0.8, 0.05),
+                  "badge": (0.13, 0.08, 0.045), "end_card": (0.5, 0.45, 0.08)}
 
 
 @tool("add_text", AddTextIn, mutates=True)
 def add_text(ctx, args: AddTextIn) -> ToolOutput:
-    """Add a title or text overlay (chapter titles, key points, names)."""
-    x, y = POSITIONS[args.position]
+    """Add a title or text overlay from a template: chapter titles, key points, a speaker's name strap, a
+    label, an end card. Fades or slides in and out by default."""
+    x, y, size = STYLE_DEFAULTS[args.style]
+    if args.style == "plain" and args.position:
+        x, y = POSITIONS[args.position]
     t = ops.add_text(ctx.session.timeline, args.start, args.end, args.text,
                      x=args.x if args.x is not None else x, y=args.y if args.y is not None else y,
-                     size=args.size, color=args.color, box=args.box)
-    return f"Added text {t.id} {format_tc(t.start)}–{format_tc(t.end)}."
+                     size=args.size or size, color=args.color, box=args.box, style=args.style,
+                     subtitle=args.subtitle, accent=args.accent, animation=args.animation)
+    return f"Added {t.style} text {t.id} {format_tc(t.start)}–{format_tc(t.end)} ({t.animation})."
 
 
 @tool("update_text", UpdateTextIn, mutates=True)

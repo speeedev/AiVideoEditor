@@ -28,6 +28,11 @@ from .project import ROLES, Project
 STATIC = Path(__file__).parent / "webui"
 
 
+# Browsers play H.264/AAC QuickTime files fine when told they are MP4.
+_MEDIA_TYPES = {".mov": "video/mp4", ".m4v": "video/mp4", ".mp4": "video/mp4", ".wav": "audio/wav",
+                ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".aac": "audio/aac", ".png": "image/png",
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
 _NO_PROJECT_OK = ("/", "/index.html", "/api/state", "/api/events", "/api/settings")
 
 
@@ -215,6 +220,7 @@ class App:
                 "duration": p.timeline.duration,
                 "renders": renders,
                 "current_render": self.current_render(),
+                "caption_events": self._caption_events(),
                 "words": words,
                 "job": self.job,
                 "history": len(p.history()),
@@ -280,6 +286,39 @@ class App:
             out.with_suffix(".json").write_text(json.dumps({"timeline": key, "preview": preview}), encoding="utf-8")
             return {"file": out.name}
         self.start_job("render", run)
+
+    def _caption_events(self) -> list:
+        """Caption timing for the live player (the same grouping as the renderer)."""
+        if not self.project.timeline.captions.enabled:
+            return []
+        from .render.captions import caption_events
+        words = self.session.caption_words() or []
+        return [[round(e.start, 3), round(e.end, 3), list(e.texts), e.highlight]
+                for e in caption_events(words, self.project.timeline.captions)]
+
+    def text_image(self, text_id: str, width: int, height: int) -> bytes:
+        """A title exactly as the renderer draws it (for the live player)."""
+        import io
+
+        from .render.titles import render_text_image
+        width, height = max(16, min(width, 3840)), max(16, min(height, 3840))
+        x = next((t for t in self.project.timeline.texts if t.id == text_id), None)
+        if x is None:
+            raise KeyError(f"unknown text '{text_id}'")
+        buf = io.BytesIO()
+        render_text_image(x, width, height).save(buf, format="PNG", compress_level=1)
+        return buf.getvalue()
+
+    def media_file(self, asset_id: str, video: bool) -> Path:
+        """File the live player streams: the editing proxy for picture when there is one, else the original."""
+        asset = self.project.asset(asset_id)
+        if video and not asset.is_image:
+            from .media.proxy import load_proxies
+            proxy = load_proxies(self.project).get(asset_id)
+            if proxy:
+                return Path(proxy.path)
+            return Path(asset.video_path)
+        return Path(asset.path)
 
     def _timeline_key(self) -> str:
         import hashlib
@@ -573,6 +612,16 @@ def make_handler(app: App):
                     return self._json(app.state())
                 if path == "/api/conversation":
                     return self._json(app.conversation())
+                if path == "/api/textimg":
+                    data = app.text_image(qs.get("id", [""])[0], int(qs.get("w", ["1280"])[0]),
+                                          int(qs.get("h", ["720"])[0]))
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "max-age=3600")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if path == "/api/still":
                     t = float(qs.get("t", ["0"])[0])
                     w = int(qs.get("w", ["960"])[0])
@@ -584,6 +633,11 @@ def make_handler(app: App):
                     self.end_headers()
                     self.wfile.write(data)
                     return
+                m = re.fullmatch(r"/media/([^/]+)", path)
+                if m:
+                    f = app.media_file(unquote(m.group(1)), video=bool(qs.get("v")))
+                    ctype = _MEDIA_TYPES.get(f.suffix.lower())
+                    return self._file(f, ctype)
                 if path.startswith("/renders/"):
                     p = self._safe_child(app.project.renders_dir(), path[len("/renders/"):])
                     if p and qs.get("download"):

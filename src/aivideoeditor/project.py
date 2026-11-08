@@ -50,6 +50,7 @@ class Asset(BaseModel):
     sync: SyncInfo | None = None
     notes: str = ""
     audio_stream: int = 0     # which audio stream of the file to use (e.g. OBS multi-track recordings)
+    stabilized: str | None = None   # stabilised copy of the picture (cache/stabilized/<id>.mp4)
 
     @property
     def media(self) -> MediaInfo:
@@ -70,6 +71,11 @@ class Asset(BaseModel):
     @property
     def is_image(self) -> bool:
         return bool(self.info.get("is_image"))
+
+    @property
+    def video_path(self) -> str:
+        """File to take the picture from (a stabilised copy when there is one)."""
+        return self.stabilized if self.stabilized and Path(self.stabilized).exists() else self.path
 
 
 class ProjectFile(BaseModel):

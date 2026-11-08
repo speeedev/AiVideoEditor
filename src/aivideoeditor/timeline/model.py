@@ -150,6 +150,10 @@ class TextOverlay(BaseModel):
     box: bool = True
     box_color: str = "black@0.55"
     font: str | None = None
+    style: Literal["plain", "title", "lower_third", "badge", "end_card"] = "plain"
+    subtitle: str = ""                       # second line (title, lower third, end card)
+    accent: str = "#3B82F6"                  # bar / badge colour
+    animation: Literal["none", "fade", "slide_up", "slide_left"] = "none"
 
     @property
     def duration(self) -> float:

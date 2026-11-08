@@ -131,3 +131,20 @@ def test_download_captions_and_clip_delete(server):
         assert r.status == 200 and "attachment" in r.headers["Content-Disposition"]
         assert r.read(8)
     assert post(base + "/api/reveal", {"file": "../project.json"})[0] == 400
+
+
+def test_live_player_endpoints(server):
+    base, app = server
+    from aivideoeditor.timeline import ops as _ops
+    _ops.add_text(app.project.timeline, 0.5, 2.0, "Merhaba", style="title")
+    app.project.save()
+    tid = app.project.timeline.texts[-1].id
+    status, ctype, body = get(base + f"/api/textimg?id={tid}&w=320&h=180")
+    assert status == 200 and ctype == "image/png" and body[:4] == b"\x89PNG"
+    status, ctype, body = get(base + "/media/mic")
+    assert status == 200 and ctype == "audio/wav" and len(body) > 1000
+    status, ctype, _ = get(base + "/media/screen?v=1")
+    assert status == 200 and ctype == "video/mp4"
+    post(base + "/api/edit", {"tool": "set_captions", "args": {"enabled": True}})
+    state = json.loads(get(base + "/api/state")[2])
+    assert state["caption_events"] and len(state["caption_events"][0]) == 4
