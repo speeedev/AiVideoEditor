@@ -183,3 +183,6 @@ a.button { text-decoration: none; color: var(--text); }
 #colorPanel { right: 420px; top: auto; bottom: 330px; }
 .tl-toolbar { flex-wrap: wrap; row-gap: 4px; }
 #clipText, #selText { white-space: nowrap; }
+.clip.dragging, .textov.dragging { opacity: .85; box-shadow: 0 0 0 2px var(--accent); z-index: 5; }
+.track.drop-row { background: rgba(106,165,255,.12); }
+.textov { cursor: grab; }

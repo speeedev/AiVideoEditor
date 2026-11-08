@@ -99,11 +99,11 @@
           <button id="clipDelete" class="small" title="Sadece bu klibi kaldır, yeri boş kalsın (Delete)">Sil</button>
           <button id="clipRipple" class="small" title="Bu zaman aralığını bütün track'lerden kes, video kısalsın (Shift+Delete)">Sil ve boşluğu kapat</button>
           <button id="clipColor" class="small" title="Seçili kliplerin rengini ayarla">🎨 Renk</button>
-          <select id="clipTransition" class="small" title="Bu klibe girişte geçiş">
-            <option value="">Geçiş…</option>
-            <option value="crossfade">Yumuşak geçiş (crossfade)</option>
+          <label class="small muted" for="clipTransition">Geçiş</label>
+          <select id="clipTransition" class="small" title="Bu klibe girişteki geçiş">
+            <option value="none">Yok</option>
+            <option value="crossfade">Yumuşak (crossfade)</option>
             <option value="dip_to_black">Siyaha geçiş</option>
-            <option value="none">Geçiş yok</option>
           </select>
           <button id="clipClear" class="small">Seçimi kaldır</button>
         </span>

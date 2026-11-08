@@ -305,6 +305,7 @@ function renderTimeline() {
     lane.style.width = `${width}px`;
     for (const x of tl.texts) {
       const te = el("div", "textov", x.text);
+      te.dataset.textId = x.id;
       te.style.left = `${x.start * pps}px`;
       te.style.width = `${Math.max(2, (x.end - x.start) * pps - 1)}px`;
       te.title = `${x.id}: ${x.text}`;
@@ -335,48 +336,14 @@ function renderTimeline() {
     row.append(label, lane);
     tracks.appendChild(row);
   }
-  document.querySelectorAll(".lane, .ruler").forEach((lane) => {
-    lane.onmousedown = (e) => {
-      if (e.button !== 0) return;
-      const r = lane.getBoundingClientRect();
-      const t0 = (e.clientX - r.left) / pps;
-      const clipEl = e.target.closest ? e.target.closest(".clip") : null;
-      let moved = false;
-      const move = (ev) => {
-        const t1 = (ev.clientX - r.left) / pps;
-        if (Math.abs(ev.clientX - e.clientX) > 4) {
-          moved = true;
-          setSelection(Math.min(t0, t1), Math.max(t0, t1));
-        }
-      };
-      const up = (ev) => {
-        document.removeEventListener("mousemove", move);
-        document.removeEventListener("mouseup", up);
-        if (!moved) {
-          if (clipEl) {
-            const id = clipEl.dataset.clipId;
-            if (ev.shiftKey || ev.metaKey) {
-              if (selectedClips.has(id)) selectedClips.delete(id); else selectedClips.add(id);
-            } else {
-              selectedClips = new Set([id]);
-            }
-            selection = null;
-          } else {
-            selectedClips = new Set();
-          }
-          drawClipSelection();
-          drawSelection();
-          setPlayhead(t0);
-        } else {
-          selectedClips = new Set();
-          drawClipSelection();
-          setPlayhead((ev.clientX - r.left) / pps);
-        }
-      };
-      document.addEventListener("mousemove", move);
-      document.addEventListener("mouseup", up);
-      e.preventDefault();
+  document.querySelectorAll(".clip, .textov").forEach((item) => {
+    item.onmousemove = (ev) => {
+      const r = item.getBoundingClientRect();
+      item.style.cursor = edgeAt(ev.clientX, r) ? "ew-resize" : "grab";
     };
+  });
+  document.querySelectorAll(".lane, .ruler").forEach((lane) => {
+    lane.onmousedown = (e) => timelineMouseDown(e, lane);
   });
   drawSelection();
   drawClipSelection();
@@ -385,6 +352,146 @@ function renderTimeline() {
     `${tc(S.duration)} · ${tl.canvas.width}×${tl.canvas.height} ${tl.canvas.fps} fps`;
   setPlayhead(Math.min(playhead, S.duration), true);
 }
+// ------------------------------------------------- timeline mouse: select, move, trim --
+const EDGE_PX = 6;
+function edgeAt(x, rect) {
+  if (rect.width < EDGE_PX * 3) return null;
+  if (x - rect.left < EDGE_PX) return "start";
+  if (rect.right - x < EDGE_PX) return "end";
+  return null;
+}
+function findText(id) { return S.timeline.texts.find((x) => x.id === id) || null; }
+function snapTimes(exceptId) {
+  const ts = [0, playhead];
+  for (const t of S.timeline.tracks) for (const c of t.clips) if (c.id !== exceptId) ts.push(c.start, clipEnd(c));
+  for (const x of S.timeline.texts) if (x.id !== exceptId) ts.push(x.start, x.end);
+  return ts;
+}
+function snap(t, cands) {
+  const tol = 8 / pps;
+  let best = t, bd = tol;
+  for (const c of cands) if (Math.abs(c - t) < bd) { best = c; bd = Math.abs(c - t); }
+  return best;
+}
+function timelineMouseDown(e, lane) {
+  if (e.button !== 0) return;
+  const r = lane.getBoundingClientRect();
+  const t0 = (e.clientX - r.left) / pps;
+  const clipEl = e.target.closest ? e.target.closest(".clip") : null;
+  const textEl = !clipEl && e.target.closest ? e.target.closest(".textov") : null;
+  const item = clipEl || textEl;
+  let info = null;
+  if (item) {
+    const found = clipEl ? findClip(clipEl.dataset.clipId) : null;
+    const text = textEl ? findText(textEl.dataset.textId) : null;
+    if (found || text) {
+      info = {
+        el: item, kind: clipEl ? "clip" : "text", id: clipEl ? found[1].id : text.id,
+        track: found ? found[0] : null,
+        start: found ? found[1].start : text.start, end: found ? clipEnd(found[1]) : text.end,
+        edge: edgeAt(e.clientX, item.getBoundingClientRect()),
+      };
+      info.cands = snapTimes(info.id);
+      info.newStart = info.start; info.newEnd = info.end; info.targetTrack = info.track && info.track.id;
+    }
+  }
+  let mode = null;
+  let hover = null;
+  const move = (ev) => {
+    const dx = ev.clientX - e.clientX;
+    if (!mode && Math.abs(dx) < 4 && Math.abs(ev.clientY - e.clientY) < 4) return;
+    if (!info) {
+      mode = "range";
+      const t1 = (ev.clientX - r.left) / pps;
+      setSelection(Math.min(t0, t1), Math.max(t0, t1));
+      return;
+    }
+    const dt = dx / pps;
+    const len = info.end - info.start;
+    if (info.edge === "start") {
+      mode = "trim";
+      info.newStart = Math.max(0, Math.min(snap(info.start + dt, info.cands), info.end - 0.1));
+    } else if (info.edge === "end") {
+      mode = "trim";
+      info.newEnd = Math.max(snap(info.end + dt, info.cands), info.start + 0.1);
+    } else {
+      mode = "move";
+      let ns = Math.max(0, info.start + dt);
+      const a = snap(ns, info.cands), b = snap(ns + len, info.cands) - len;
+      ns = Math.abs(a - ns) <= Math.abs(b - ns) ? a : b;
+      info.newStart = Math.max(0, ns);
+      info.newEnd = info.newStart + len;
+      if (info.kind === "clip") {
+        const under = document.elementFromPoint(ev.clientX, ev.clientY);
+        const row = under && under.closest ? under.closest(".track") : null;
+        const tt = row && S.timeline.tracks.find((t) => t.id === row.dataset.trackId);
+        info.targetTrack = tt && tt.kind === info.track.kind ? tt.id : info.track.id;
+        if (hover) hover.classList.remove("drop-row");
+        hover = document.querySelector(`.track[data-track-id="${info.targetTrack}"]`);
+        if (hover && info.targetTrack !== info.track.id) hover.classList.add("drop-row"); else hover = null;
+      }
+    }
+    info.el.classList.add("dragging");
+    info.el.style.left = `${info.newStart * pps}px`;
+    info.el.style.width = `${Math.max(2, (info.newEnd - info.newStart) * pps - 1)}px`;
+    $("timecode").textContent = `${tc(info.newStart)} – ${tc(info.newEnd)}`;
+  };
+  const up = guard(async (ev) => {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+    if (hover) hover.classList.remove("drop-row");
+    if (!mode) {                                      // a click
+      if (clipEl) {
+        const id = clipEl.dataset.clipId;
+        if (ev.shiftKey || ev.metaKey) {
+          if (selectedClips.has(id)) selectedClips.delete(id); else selectedClips.add(id);
+        } else {
+          selectedClips = new Set([id]);
+        }
+        selection = null;
+      } else if (!textEl) {
+        selectedClips = new Set();
+      }
+      drawClipSelection();
+      drawSelection();
+      setPlayhead(t0);
+      return;
+    }
+    if (mode === "range") {
+      selectedClips = new Set();
+      drawClipSelection();
+      setPlayhead((ev.clientX - r.left) / pps);
+      return;
+    }
+    const changed = Math.abs(info.newStart - info.start) > 1e-3 || Math.abs(info.newEnd - info.end) > 1e-3 ||
+      (info.targetTrack && info.track && info.targetTrack !== info.track.id);
+    if (!changed) { renderTimeline(); return; }
+    try {
+      let res;
+      if (info.kind === "clip") {
+        selectedClips = new Set([info.id]);
+        if (mode === "move") {
+          res = await api("/api/edit", { tool: "move_clip", args: { clip_id: info.id, start: info.newStart,
+            track_id: info.targetTrack, overwrite: ev.altKey } });
+        } else {
+          res = await api("/api/edit", { tool: "trim_clip", args: info.edge === "start"
+            ? { clip_id: info.id, start: info.newStart } : { clip_id: info.id, end: info.newEnd } });
+        }
+      } else {
+        res = await api("/api/edit", { tool: "update_text", args: { text_id: info.id, start: info.newStart, end: info.newEnd } });
+      }
+      status(res.result);
+    } catch (err) {
+      renderTimeline();                                // put the clip back where it was
+      throw new Error(/overlaps/.test(err.message)
+        ? "Orası dolu: başka bir klibin üstüne bırakılamaz (Alt basılı bırakırsan üzerine yazar)" : err.message);
+    }
+  });
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+  e.preventDefault();
+}
+
 let selectedClips = new Set();
 function findClip(id) {
   for (const t of S.timeline.tracks) for (const c of t.clips) if (c.id === id) return [t, c];
@@ -402,6 +509,14 @@ function drawClipSelection() {
     return `${ROLE_TR[t.role] || t.role || t.id} ${tc(c.start)}`;
   });
   $("clipText").textContent = selectedClips.size === 1 ? parts[0] : `${selectedClips.size} klip`;
+  const [ft, fc] = findClip([...selectedClips][0]);
+  let tr = "none";
+  if (fc.transition === "crossfade") tr = "crossfade";
+  else if (fc.fade_in > 0) {
+    const prev = ft.clips.find((o) => o !== fc && Math.abs(clipEnd(o) - fc.start) < 0.05);
+    if (prev && prev.fade_out > 0) tr = "dip_to_black";
+  }
+  $("clipTransition").value = tr;
 }
 const deleteClips = guard(async (ripple) => {
   if (!selectedClips.size) return;
@@ -827,7 +942,6 @@ function wire() {
   wireColor();
   $("clipTransition").onchange = guard(async () => {
     const kind = $("clipTransition").value;
-    $("clipTransition").value = "";
     if (!kind || !selectedClips.size) return;
     const [, c] = findClip([...selectedClips][0]);
     const r = await api("/api/edit", { tool: "add_transition", args: { time: c.start, kind, duration: kind === "crossfade" ? 0.6 : 0.8 } });

@@ -441,7 +441,8 @@ class App:
 
         from .agent.tools import run_tool
         allowed = {"ripple_delete", "apply_layout", "zoom", "speed_up", "add_text", "add_marker", "set_captions",
-                   "split", "delete_clips", "move_range", "color_correct", "add_transition"}
+                   "split", "delete_clips", "move_range", "color_correct", "add_transition", "move_clip",
+                   "trim_clip", "update_text"}
         if tool not in allowed:
             raise ValueError(f"tool '{tool}' is not available from the UI")
         if self.job:
