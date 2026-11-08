@@ -32,10 +32,12 @@ def _open(path: str):
 
 def cmd_init(a: argparse.Namespace) -> None:
     from .project import Project
+    from .claude_setup import write_claude_files
     p = Project.create(a.project, a.name, width=a.width, height=a.height, fps=a.fps)
     if a.brief:
         p.data.brief = a.brief
         p.save()
+    write_claude_files(p)
     print(f"Created project {p.root} ({a.width}x{a.height} @ {a.fps:g} fps)")
 
 
@@ -211,14 +213,34 @@ class CliDisplay:
 
 
 def _make_agent(a: argparse.Namespace, session):
-    from .agent import EditAgent
+    from .agent import DEFAULT_MODEL, make_agent, resolve_backend
+    backend = resolve_backend(a.backend)
+    display = CliDisplay(verbose=a.verbose)
+    if backend == "claude-code":
+        print(_c(DIM, "Using your Claude subscription through Claude Code (switch with --backend api)."))
+        return make_agent(session, backend=backend, model=a.model, max_turns=a.max_turns, display=display)
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
             or os.environ.get("ANTHROPIC_PROFILE")):
         config = Path.home() / ".config" / "anthropic"
         if not config.exists():
-            print(_c(RED, "No Anthropic credentials found. Set ANTHROPIC_API_KEY or run `ant auth login`."))
-    return EditAgent(session, model=a.model, effort=a.effort, max_turns=a.max_turns,
-                     display=CliDisplay(verbose=a.verbose), use_fallbacks=not a.no_fallbacks)
+            print(_c(RED, "No Anthropic API credentials found. Set ANTHROPIC_API_KEY, or install Claude Code "
+                          "and use --backend claude-code to edit on your Claude subscription."))
+    return make_agent(session, backend=backend, model=a.model or DEFAULT_MODEL, effort=a.effort,
+                      max_turns=a.max_turns, display=display, use_fallbacks=not a.no_fallbacks)
+
+
+def cmd_claude_setup(a: argparse.Namespace) -> None:
+    from .claude_setup import write_claude_files
+    p = _open(a.project)
+    files = write_claude_files(p)
+    print("Wrote " + ", ".join(str(f) for f in files))
+    print(f"Now run Claude Code in the project folder (logged in with your subscription):\n  cd {p.root}\n  claude\n"
+          "and ask it to edit the video. The editing tools appear as the 'ave' MCP server.")
+
+
+def cmd_mcp(a: argparse.Namespace) -> None:
+    from .mcp_server import serve_stdio
+    serve_stdio(a.project)
 
 
 def cmd_edit(a: argparse.Namespace) -> None:
@@ -232,7 +254,7 @@ def cmd_edit(a: argparse.Namespace) -> None:
     result = agent.run(instruction, new_conversation=a.new)
     print()
     print(_c(BOLD, result.text))
-    print(_c(DIM, f"\n[{result.stop_reason}] {result.turns} turns · {result.usage.summary(result.model)}"))
+    print(_c(DIM, f"\n[{result.stop_reason}] {result.turns} turns · {result.summary()}"))
     print(_c(DIM, f"Timeline duration: {format_tc(session.timeline.duration)}"))
     if a.render:
         _render(session, preview=True)
@@ -268,7 +290,7 @@ def cmd_chat(a: argparse.Namespace) -> None:
         result = agent.run(line, new_conversation=a.new and first)
         first = False
         print("\n" + _c(BOLD, result.text))
-        print(_c(DIM, f"[{result.usage.summary(result.model)}] duration {format_tc(session.timeline.duration)}"))
+        print(_c(DIM, f"[{result.summary()}] duration {format_tc(session.timeline.duration)}"))
 
 
 def _render(session, *, preview: bool, output: str | None = None, width: int = 640) -> Path:
@@ -336,13 +358,16 @@ def cmd_demo(a: argparse.Namespace) -> None:
     analyze_project(p, do_transcribe=False)
     sync_project(p)
     EditorSession(p).assemble()
+    from .claude_setup import write_claude_files
+    write_claude_files(p)
     print(f"\nDemo project ready at {root}. Try:\n  ave show {root}\n  ave render {root} --preview\n"
           f"  ave edit {root} \"Remove long pauses and add a title\"")
 
 
 def cmd_ui(a: argparse.Namespace) -> None:
     from .web import serve
-    serve(a.project, host=a.host, port=a.port, model=a.model, effort=a.effort, open_browser=not a.no_browser)
+    serve(a.project, host=a.host, port=a.port, model=a.model, effort=a.effort, backend=a.backend,
+          open_browser=not a.no_browser)
 
 
 # -------------------------------------------------------------------- parser --
@@ -368,8 +393,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
 
     def agent_opts(p: argparse.ArgumentParser) -> None:
-        from .agent import DEFAULT_MODEL
-        p.add_argument("--model", default=os.environ.get("AVE_MODEL", DEFAULT_MODEL))
+        p.add_argument("--backend", default=os.environ.get("AVE_BACKEND", "auto"),
+                       choices=["auto", "claude-code", "api"],
+                       help="claude-code: your Claude subscription via the Claude Code CLI; api: ANTHROPIC_API_KEY; "
+                            "auto (default): Claude Code when installed")
+        p.add_argument("--model", default=os.environ.get("AVE_MODEL"),
+                       help="model id (default: claude-opus-5-5 for api, Claude Code's default otherwise)")
         p.add_argument("--effort", default=os.environ.get("AVE_EFFORT", "high"),
                        choices=["low", "medium", "high", "xhigh", "max"])
         p.add_argument("--max-turns", type=int, default=80)
@@ -485,13 +514,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--duration", type=float, default=30.0)
     p.set_defaults(func=cmd_demo)
 
+    p = sub.add_parser("claude-setup", help="write .mcp.json and CLAUDE.md so Claude Code can edit this project")
+    p.add_argument("project")
+    p.set_defaults(func=cmd_claude_setup)
+
+    p = sub.add_parser("mcp", help="run the editing-tools MCP server on stdio (started by Claude Code)")
+    p.add_argument("project")
+    p.set_defaults(func=cmd_mcp)
+
     p = sub.add_parser("ui", help="open the local web editor (timeline, preview, chat with Claude)")
     p.add_argument("project")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true")
-    from .agent import DEFAULT_MODEL
-    p.add_argument("--model", default=os.environ.get("AVE_MODEL", DEFAULT_MODEL))
+    p.add_argument("--backend", default=os.environ.get("AVE_BACKEND", "auto"), choices=["auto", "claude-code", "api"])
+    p.add_argument("--model", default=os.environ.get("AVE_MODEL"))
     p.add_argument("--effort", default=os.environ.get("AVE_EFFORT", "high"),
                    choices=["low", "medium", "high", "xhigh", "max"])
     p.set_defaults(func=cmd_ui)

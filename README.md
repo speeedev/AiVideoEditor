@@ -36,13 +36,17 @@ zamanlarla çalışır.
 
 ## Kurulum
 
-Gereksinimler: **Python 3.10+**, **FFmpeg** (PATH'te `ffmpeg` ve `ffprobe`), Anthropic API anahtarı.
+Gereksinimler: **Python 3.10+**, **FFmpeg** (PATH'te `ffmpeg` ve `ffprobe`) ve Claude'a erişim. Erişim için iki
+yol var:
+
+- **Claude aboneliği (Pro/Max, önerilen):** [Claude Code](https://code.claude.com) kurulu olsun ve bir kez `claude`
+  çalıştırıp `/login` ile aboneliğinle giriş yap. Program, kurguyu senin Claude Code'una yaptırır (aşağıya bak).
+- **API anahtarı:** `ANTHROPIC_API_KEY` ortam değişkeni (kullandığın kadar ödersin).
 
 ```bash
 git clone https://github.com/speeedev/AiVideoEditor.git
 cd AiVideoEditor
 pip install -e ".[transcribe]"
-export ANTHROPIC_API_KEY=sk-ant-...          # Windows PowerShell: $env:ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 - FFmpeg kurulumu: macOS'ta `brew install ffmpeg`, Windows'ta `winget install ffmpeg`, Ubuntu'da
@@ -51,6 +55,35 @@ export ANTHROPIC_API_KEY=sk-ant-...          # Windows PowerShell: $env:ANTHROPI
   NVIDIA GPU varsa transkripsiyon çok daha hızlıdır. Türkçe için `--model medium` ya da `large-v3`
   belirgin şekilde daha isabetlidir (`small` hızlı ama daha çok hata yapar). Whisper'ın sessiz yerlerde
   uydurduğu "Altyazı M.K." gibi ifadeler otomatik olarak temizlenir.
+
+## Claude aboneliğiyle kullanım (Claude Code)
+
+Program Claude'u iki şekilde kullanabilir. Varsayılan `auto` modu, Claude Code kuruluysa aboneliği seçer.
+
+| | Abonelik (Claude Code) | API anahtarı |
+|---|---|---|
+| Nasıl | Senin, giriş yapmış Claude Code'un kurguyu yapar; programın araçları ona MCP sunucusu olarak bağlanır | Program Claude API'sini doğrudan çağırır |
+| Ücret | Abonelik limitlerinden düşer | Token başına ödeme |
+| Seçim | `--backend claude-code` / arayüzde "Abonelik" | `--backend api` / arayüzde "API anahtarı" |
+
+Abonelik modunda program Claude kimlik bilgilerine hiç dokunmaz: ne okur, ne saklar. Claude Code'u kendi
+oturumunla çalıştırır ve API anahtarı değişkenlerini Claude Code'a geçirmez (yoksa Claude Code aboneliği değil
+API anahtarını kullanırdı). Anthropic'in kuralları, kişinin kendi aboneliğiyle değiştirilmemiş Claude Code'u
+kullanmasına izin veriyor. Ama üçüncü taraf uygulamaların başkalarına abonelik girişi sunmasına izin vermiyor.
+Yani bu mod kişisel kullanım içindir; programı başkalarına dağıtırsan onlar API anahtarı kullanmalı.
+
+Üç kullanım şekli:
+
+1. **Web arayüzü:** `ave ui proje` → sağ paneldeki seçimden "Abonelik (Claude Code)".
+2. **Komut satırı:** `ave edit proje "talimat"` (Claude Code kuruluysa otomatik olarak abonelikle çalışır).
+3. **Doğrudan Claude Code içinde:** proje klasöründe `claude` çalıştır ve konuş. `ave init`, klasöre
+   `.mcp.json` (araçlar) ve `CLAUDE.md` (kurgu rehberi) yazar; eski projeler için `ave claude-setup proje`.
+
+```bash
+cd benim-videom
+claude
+> Videoyu kurgula: sessizlikleri ve hataları temizle, okunmayan yerlere zoom yap
+```
 
 ## Hızlı deneme (sentetik demo)
 
@@ -118,9 +151,12 @@ Diğer komutlar:
 | `ave export PROJE --format xml\|otio\|edl\|json\|srt` | diğer editörlere aktarır / altyazı dosyası üretir |
 | `ave status PROJE` | projenin durumu ve sıradaki adım |
 | `ave brief PROJE "metin"` | proje özetini ayarlar |
+| `ave claude-setup PROJE` | Claude Code için `.mcp.json` ve `CLAUDE.md` yazar |
+| `ave mcp PROJE` | düzenleme araçlarını MCP sunucusu olarak çalıştırır (Claude Code başlatır) |
 
-Model ve düşünme derinliği: `--model claude-opus-5-5` (varsayılan) ve `--effort low|medium|high|xhigh|max`
-(varsayılan `high`). Bunlar `AVE_MODEL` ve `AVE_EFFORT` ortam değişkenleriyle de ayarlanabilir.
+Claude bağlantısı: `--backend auto|claude-code|api` (`AVE_BACKEND`). Model: `--model` (`AVE_MODEL`; API modunda
+varsayılan `claude-opus-5-5`, abonelik modunda Claude Code'un varsayılanı). API modunda düşünme derinliği:
+`--effort low|medium|high|xhigh|max` (varsayılan `high`, `AVE_EFFORT`).
 
 ## Claude'un araçları
 
@@ -203,9 +239,17 @@ src/aivideoeditor/
   sunucu taraflı fallback açıktır, araç girdileri pydantic ile doğrulanır. Sohbet yalnızca sona ekleme
   yapılarak diske yazılır. Görseller araç sonuçlarının içinde gönderilir.
 
+## Sessiz videolar ve resimler
+
+- **Sadece ekran kaydı, hiç ses yok:** desteklenir. Analiz, ekranda ne zaman ve **nerede** değişiklik olduğunu
+  (yazı yazma, imleç, menüler) çıkarır. Claude `scan_video` ile değişim anlarındaki kareleri tarar, boş beklemeleri
+  keser ya da hızlandırır, önemli yerlere zoom yapar. Başlık, yazı ve müzik isteğe göre eklenir. Çıktı yine MP4'tür.
+- **Resimler:** PNG/JPG/WebP kayıtlara eklenebilir. Claude bunları logo, slayt, ekran görüntüsü ya da tam ekran
+  görsel olarak (`add_overlay`) kullanır.
+
 ## Sınırlamalar ve yol haritası
 
-- Sesi olmayan kayıtlar (örneğin sessiz ekran kaydı) sese göre senkronlanamaz. Bunlar referansla aynı
+- Sesi olmayan birden fazla kayıt (ör. sessiz ekran kaydı + sessiz kamera) sese göre senkronlanamaz. Bunlar aynı
   anda başlamış kabul edilir; `ave sync --manual` ile düzeltilebilir.
 - Whisper dolgu kelimeleri bazen atlar. Duraklama analizi bunu büyük ölçüde telafi eder.
 - Planlananlar: klipler arası geçiş efektleri (crossfade), müzik ritmine kesim, timeline'da

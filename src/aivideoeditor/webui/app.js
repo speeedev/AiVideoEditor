@@ -56,8 +56,12 @@ function refreshSoon() {
 function renderAll() {
   $("projectName").textContent = S.project.name;
   if (document.activeElement !== $("brief")) $("brief").value = S.project.brief || "";
-  $("model").value = S.model;
+  $("model").value = S.model || "";
   $("effort").value = S.effort;
+  $("backend").value = S.backend;
+  $("effort").classList.toggle("hidden", S.backend !== "api");
+  const ccOpt = $("backend").querySelector('option[value="claude-code"]');
+  ccOpt.textContent = S.claude_code_available ? "Abonelik (Claude Code)" : "Abonelik (Claude Code kurulu değil)";
   renderAssets();
   renderTimeline();
   renderRenders();
@@ -484,8 +488,10 @@ function wire() {
     window.open(r.url, "_blank");
   });
   $("brief").onchange = guard(() => api("/api/brief", { brief: $("brief").value }));
-  $("model").onchange = $("effort").onchange = guard(() =>
-    api("/api/settings", { model: $("model").value, effort: $("effort").value }));
+  $("model").onchange = $("effort").onchange = $("backend").onchange = guard(async () => {
+    await api("/api/settings", { model: $("model").value, effort: $("effort").value, backend: $("backend").value });
+    refresh();
+  });
   $("tabFrame").onclick = () => showTab("frame");
   $("tabVideo").onclick = () => showTab("video");
   $("renderSelect").onchange = () => showTab("video");

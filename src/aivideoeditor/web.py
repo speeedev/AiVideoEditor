@@ -28,6 +28,11 @@ from .project import ROLES, Project
 STATIC = Path(__file__).parent / "webui"
 
 
+def _claude_binary() -> str | None:
+    from .agent.claude_code import claude_binary
+    return claude_binary()
+
+
 class EventBus:
     def __init__(self) -> None:
         self._subs: set[queue.Queue] = set()
@@ -58,13 +63,16 @@ class Busy(RuntimeError):
 
 
 class App:
-    def __init__(self, project_path: str, *, model: str, effort: str):
+    def __init__(self, project_path: str, *, model: str | None = None, effort: str = "high",
+                 backend: str = "auto"):
+        from .agent import DEFAULT_MODEL, resolve_backend
         self.project = Project.open(project_path)
         from .session import EditorSession
         self.session = EditorSession(self.project)
         self.lock = threading.RLock()
         self.bus = EventBus()
-        self.model = model
+        self.backend = resolve_backend(backend)
+        self.model = model or (DEFAULT_MODEL if self.backend == "api" else "")
         self.effort = effort
         self.job: str | None = None
         self._job_lock = threading.Lock()
@@ -129,6 +137,8 @@ class App:
                 "history": len(p.history()),
                 "model": self.model,
                 "effort": self.effort,
+                "backend": self.backend,
+                "claude_code_available": bool(_claude_binary()),
             }
 
     # -- actions ----------------------------------------------------------------
@@ -199,8 +209,9 @@ class App:
             return out.read_bytes()
 
     def run_agent(self, instruction: str, new: bool) -> None:
-        from .agent import Display, EditAgent
+        from .agent import DEFAULT_MODEL, Display, make_agent
         bus = self.bus
+        app = self
 
         class WebDisplay(Display):
             def text(self, delta: str) -> None:
@@ -236,17 +247,26 @@ class App:
                 bus.publish({"type": "log", "message": message})
 
         def run():
-            agent = EditAgent(self.session, model=self.model, effort=self.effort, display=WebDisplay(),
-                              lock=self.lock)
+            def reload_project(_name: str) -> None:
+                # Claude Code runs the tools in its own MCP server process, which saves to disk.
+                with app.lock:
+                    app.project.load()
+
+            if self.backend == "claude-code":
+                agent = make_agent(self.session, backend="claude-code", model=self.model or None,
+                                   display=WebDisplay(), on_tool_result=reload_project)
+            else:
+                agent = make_agent(self.session, backend="api", model=self.model or DEFAULT_MODEL,
+                                   effort=self.effort, display=WebDisplay(), lock=self.lock)
             try:
                 result = agent.run(instruction, new_conversation=new)
             except TypeError as exc:
                 if "authentication" in str(exc).lower():
-                    raise RuntimeError("Anthropic API credentials not found. Set ANTHROPIC_API_KEY (or run "
-                                       "`ant auth login`) and restart `ave ui`.") from exc
+                    raise RuntimeError("Anthropic API credentials not found. Set ANTHROPIC_API_KEY, or switch the "
+                                       "backend to your Claude subscription (Claude Code).") from exc
                 raise
             bus.publish({"type": "agent_done", "text": result.text, "stop_reason": result.stop_reason,
-                         "usage": result.usage.summary(result.model)})
+                         "usage": result.summary()})
             return {"stop_reason": result.stop_reason}
         self.start_job("agent", run)
 
@@ -500,11 +520,13 @@ def make_handler(app: App):
                         out = export_timeline(app.project, body.get("format", "xml"))
                     return self._json({"file": out.name, "url": f"/exports/{out.name}"})
                 if path == "/api/settings":
-                    if body.get("model"):
-                        app.model = body["model"]
+                    if "model" in body:
+                        app.model = body.get("model") or ""
                     if body.get("effort") in ("low", "medium", "high", "xhigh", "max"):
                         app.effort = body["effort"]
-                    return self._json({"model": app.model, "effort": app.effort})
+                    if body.get("backend") in ("claude-code", "api"):
+                        app.backend = body["backend"]
+                    return self._json({"model": app.model, "effort": app.effort, "backend": app.backend})
                 return self._error("not found", 404)
             except Busy as exc:
                 return self._error(str(exc), 409)
@@ -545,13 +567,14 @@ def make_handler(app: App):
     return Handler
 
 
-def serve(project_path: str, *, host: str = "127.0.0.1", port: int = 8765, model: str = "claude-opus-5-5",
-          effort: str = "high", open_browser: bool = True) -> None:
-    app = App(project_path, model=model, effort=effort)
+def serve(project_path: str, *, host: str = "127.0.0.1", port: int = 8765, model: str | None = None,
+          effort: str = "high", backend: str = "auto", open_browser: bool = True) -> None:
+    app = App(project_path, model=model, effort=effort, backend=backend)
     httpd = ThreadingHTTPServer((host, port), make_handler(app))
     httpd.daemon_threads = True
     url = f"http://{host}:{port}/"
-    print(f"AI Video Editor UI for {app.project.root}\n  {url}\n(Ctrl+C to stop)")
+    mode = "Claude subscription (Claude Code)" if app.backend == "claude-code" else "Anthropic API key"
+    print(f"AI Video Editor UI for {app.project.root}\n  {url}\n  Claude: {mode}\n(Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:

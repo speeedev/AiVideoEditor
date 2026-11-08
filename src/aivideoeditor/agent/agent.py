@@ -80,6 +80,11 @@ class AgentResult:
     model: str = DEFAULT_MODEL
     last_render: Path | None = None
     tool_calls: list[str] = field(default_factory=list)
+    note: str = ""
+
+    def summary(self) -> str:
+        text = self.usage.summary(self.model)
+        return f"{text} · {self.note}" if self.note else text
 
 
 class AgentContext:
