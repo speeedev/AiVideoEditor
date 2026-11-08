@@ -64,9 +64,19 @@ def write_wav(path: Path, samples: np.ndarray, sr: int = SR) -> None:
         w.writeframes(pcm.tobytes())
 
 
+def _has_drawtext() -> bool:
+    from .media.ffmpeg import ffmpeg_bin
+    from .render.textlayer import _filters
+    return "drawtext" in _filters(ffmpeg_bin())
+
+
 def make_demo(out_dir: str | Path, *, duration: float = 30.0, camera_offset: float = 1.3,
               size: tuple[int, int] = (1280, 720), cam_size: tuple[int, int] = (640, 360),
-              fps: int = 30) -> DemoFiles:
+              fps: int = 30, labels: bool | None = None) -> DemoFiles:
+    """``labels`` burns "CAMERA/SCREEN hh:mm:ss" into the footage (needs FFmpeg's drawtext;
+    by default only when this FFmpeg has it)."""
+    if labels is None:
+        labels = _has_drawtext()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     voice, bursts = speech_like(duration + 1.0)
@@ -83,10 +93,11 @@ def make_demo(out_dir: str | Path, *, duration: float = 30.0, camera_offset: flo
     cam_dur = cam_audio.size / SR
     camera = out / "camera.mp4"
     w, h = cam_size
+    cam_label = (["-vf", "drawtext=text='CAMERA %{pts\\:hms}':x=20:y=20:fontsize=28:fontcolor=white:"
+                          "box=1:boxcolor=black@0.6"] if labels else [])
     run_ffmpeg([
         "-f", "lavfi", "-i", f"testsrc2=s={w}x{h}:r={fps}:d={cam_dur:.3f}",
-        "-i", str(cam_wav),
-        "-vf", "drawtext=text='CAMERA %{pts\\:hms}':x=20:y=20:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.6",
+        "-i", str(cam_wav), *cam_label,
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac",
         "-shortest", "-y", str(camera),
     ])
@@ -97,12 +108,12 @@ def make_demo(out_dir: str | Path, *, duration: float = 30.0, camera_offset: flo
     # A mostly static "desktop" with a moving element and occasional big changes.
     run_ffmpeg([
         "-f", "lavfi", "-i", f"color=c=0x1e1e2e:s={w}x{h}:r={fps}:d={duration:.3f}",
-        "-vf", (
-            "drawbox=x=40:y=40:w=iw-80:h=60:color=0x313244:t=fill,"
-            "drawbox=x='40+mod(t*120\\,iw-200)':y=200:w=120:h=40:color=0x89b4fa:t=fill,"
-            "drawtext=text='SCREEN %{pts\\:hms}':x=60:y=55:fontsize=30:fontcolor=white,"
-            "drawbox=x=0:y=0:w=iw:h=ih:color=0xf38ba8@0.5:t=fill:enable='between(t,10,14)'"
-        ),
+        "-vf", ",".join([
+            "drawbox=x=40:y=40:w=iw-80:h=60:color=0x313244:t=fill",
+            "drawbox=x='40+mod(t*120\\,iw-200)':y=200:w=120:h=40:color=0x89b4fa:t=fill",
+            *(["drawtext=text='SCREEN %{pts\\:hms}':x=60:y=55:fontsize=30:fontcolor=white"] if labels else []),
+            "drawbox=x=0:y=0:w=iw:h=ih:color=0xf38ba8@0.5:t=fill:enable='between(t,10,14)'",
+        ]),
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-an", "-y", str(screen),
     ])
     return DemoFiles(screen=screen, camera=camera, mic=mic, camera_offset=camera_offset, speech=bursts)

@@ -86,3 +86,11 @@ def test_clean_transcript_drops_hallucinations():
     clean, removed = clean_transcript(tr, [(2.2, 2.6), (8.0, 11.8)])
     assert [s.text for s in clean.segments] == ["Merhaba arkadaşlar", "tamam"]
     assert removed == 2
+
+
+def test_demo_without_drawtext(tmp_path):
+    """Homebrew's slim ffmpeg has no drawtext: the demo footage must still be generated."""
+    from aivideoeditor.demo import make_demo
+    from aivideoeditor.media.probe import probe
+    d = make_demo(tmp_path, duration=3.0, size=(320, 180), cam_size=(160, 90), labels=False)
+    assert probe(d.screen).has_video and probe(d.camera).has_audio and d.mic.exists()
