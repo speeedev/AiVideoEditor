@@ -107,6 +107,7 @@ function renderAll() {
   renderTimeline();
   renderRenders();
   setBusy(S.job);
+  updatePlayButton();
   const empty = !S.timeline.tracks.length;
   $("viewerEmpty").classList.toggle("hidden", !empty);
   $("frame").classList.toggle("hidden", empty || !$("tabFrame").classList.contains("active"));
@@ -377,6 +378,39 @@ function renderRenders() {
   }
   if (cur && S.renders.includes(cur)) sel.value = cur;
 }
+// ------------------------------------------------------------- playback --
+// The edit is played from a rendered preview; when the edit changed since the last
+// render, a fast preview is rendered first and playback starts when it is ready.
+let playAfterRender = false;
+function playFrom(file) {
+  $("renderSelect").value = file;
+  showTab("video");
+  const v = $("video");
+  const start = () => {
+    v.currentTime = Math.min(playhead, Math.max(0, (v.duration || S.duration) - 0.05));
+    v.play().catch(() => {});
+  };
+  if (v.readyState >= 1 && v.src.endsWith(encodeURIComponent(file))) start();
+  else v.addEventListener("loadedmetadata", start, { once: true });
+}
+const togglePlay = guard(async () => {
+  const v = $("video");
+  if (!v.classList.contains("hidden") && !v.paused) { v.pause(); return; }
+  if (!S || !S.timeline.tracks.length) { status("Önce timeline'a bir kayıt ekle", true); return; }
+  if (S.current_render) { playFrom(S.current_render); return; }
+  if (S.job) { status(`${S.job} bitince tekrar dene`, true); return; }
+  playAfterRender = true;
+  status("Ön izleme hazırlanıyor, hazır olunca oynatılacak…");
+  await api("/api/render", { preview: true });
+});
+function updatePlayButton() {
+  const v = $("video");
+  const playing = !v.classList.contains("hidden") && !v.paused;
+  $("btnPlay").textContent = playing ? "⏸ Durdur" : "▶ Oynat";
+  $("btnPlay").title = playing ? "Durdur (Boşluk)"
+    : S && S.current_render ? "Oynat (Boşluk)" : "Oynat (Boşluk) — önce hızlı bir ön izleme render alınır";
+}
+
 function showTab(which) {
   const video = which === "video";
   $("tabFrame").classList.toggle("active", !video);
@@ -495,12 +529,18 @@ function handleEvent(ev) {
       setBusy(null);
       $("progress").classList.add("hidden");
       if (ev.status === "error") {
+        if (ev.name === "render") playAfterRender = false;
         status(`${ev.name}: ${ev.error}`, true);
         if (ev.name === "agent") chatAdd("error", ev.error);
       } else {
         status(`${ev.name} tamamlandı`);
         if (ev.name === "render" && ev.result) {
-          refresh().then(() => { $("renderSelect").value = ev.result.file; showTab("video"); });
+          const play = playAfterRender;
+          playAfterRender = false;
+          refresh().then(() => {
+            if (play) playFrom(ev.result.file);
+            else { $("renderSelect").value = ev.result.file; showTab("video"); }
+          });
         }
       }
       break;
@@ -623,6 +663,8 @@ function wire() {
   $("tlZoom").oninput = () => { pps = +$("tlZoom").value; userZoomed = true; renderTimeline(); };
   $("tlFit").onclick = () => { userZoomed = false; renderTimeline(); };
   $("send").onclick = send;
+  $("btnPlay").onclick = togglePlay;
+  ["play", "pause", "ended"].forEach((n) => $("video").addEventListener(n, updatePlayButton));
   // Drag a recording from the list onto the timeline.
   const tlArea = $("tlScroll");
   tlArea.addEventListener("dragover", (e) => {
@@ -709,7 +751,8 @@ function wire() {
     }
     if (["TEXTAREA", "INPUT", "SELECT"].includes(document.activeElement.tagName)) return;
     const fps = S ? S.timeline.canvas.fps : 30;
-    if ((e.key === "Delete" || e.key === "Backspace") && selection) { $("selCut").click(); }
+    if (e.key === " " && S && S.project) { togglePlay(); }
+    else if ((e.key === "Delete" || e.key === "Backspace") && selection) { $("selCut").click(); }
     else if (e.key === "Escape") { selection = null; drawSelection(); }
     else if (e.key === "ArrowRight") setPlayhead(playhead + (e.shiftKey ? 1 : 1 / fps));
     else if (e.key === "ArrowLeft") setPlayhead(playhead - (e.shiftKey ? 1 : 1 / fps));

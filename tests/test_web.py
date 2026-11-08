@@ -81,3 +81,19 @@ def test_manual_edit_endpoint(server):
     assert app.project.timeline.duration == pytest.approx(before - 1.0)
     assert post(base + "/api/edit", {"tool": "apply_layout", "args": {"start": 0, "end": 1, "layout": "nope"}})[0] == 400
     assert post(base + "/api/edit", {"tool": "assemble_timeline", "args": {}})[0] == 400
+
+
+def test_play_uses_current_render(server):
+    import time as _time
+    base, app = server
+    assert json.loads(get(base + "/api/state")[2])["current_render"] is None
+    assert post(base + "/api/render", {"preview": True})[0] == 200
+    for _ in range(240):
+        if app.job is None:
+            break
+        _time.sleep(0.25)
+    state = json.loads(get(base + "/api/state")[2])
+    assert state["current_render"] and state["current_render"] in state["renders"]
+    # Any edit makes the preview stale, so Play renders again.
+    post(base + "/api/edit", {"tool": "ripple_delete", "args": {"ranges": [{"start": 0, "end": 1}], "snap_to_pauses": False}})
+    assert json.loads(get(base + "/api/state")[2])["current_render"] is None

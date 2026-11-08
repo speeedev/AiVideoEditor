@@ -210,6 +210,7 @@ class App:
                 "timeline": json.loads(p.timeline.model_dump_json()),
                 "duration": p.timeline.duration,
                 "renders": renders,
+                "current_render": self.current_render(),
                 "words": words,
                 "job": self.job,
                 "history": len(p.history()),
@@ -261,6 +262,7 @@ class App:
         def run():
             with self.lock:
                 tl_copy = self.project.timeline.model_copy(deep=True)
+                key = self._timeline_key()
             from .render.engine import RenderSettings, render_timeline
             st = RenderSettings.for_timeline(tl_copy, preview=preview)
             if preview:
@@ -270,8 +272,26 @@ class App:
             out = self.project.renders_dir() / f"{'preview' if preview else 'final'}-{stamp}.mp4"
             words = self.session.caption_words()
             render_timeline(tl_copy, self.project.assets, out, st, caption_words=words, progress=progress)
+            # Remember which version of the edit this file shows, so "Play" knows when it is stale.
+            out.with_suffix(".json").write_text(json.dumps({"timeline": key, "preview": preview}), encoding="utf-8")
             return {"file": out.name}
         self.start_job("render", run)
+
+    def _timeline_key(self) -> str:
+        import hashlib
+        return hashlib.sha1(self.project.timeline.model_dump_json().encode("utf-8")).hexdigest()
+
+    def current_render(self) -> str | None:
+        """Newest render that shows exactly the current edit (None when the edit changed since)."""
+        key = self._timeline_key()
+        for f in sorted(self.project.renders_dir().glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True):
+            meta = f.with_suffix(".json")
+            try:
+                if json.loads(meta.read_text(encoding="utf-8")).get("timeline") == key:
+                    return f.name
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
 
     def still(self, t: float, width: int) -> bytes:
         from .render.engine import RenderSettings, render_still

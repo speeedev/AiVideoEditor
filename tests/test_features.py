@@ -256,10 +256,11 @@ def test_silent_screen_recording_project(tmp_path):
     from aivideoeditor.project import Project
     from aivideoeditor.session import EditorSession
     screen = tmp_path / "screen.mp4"
-    # A static "editor" where small text is being typed only between 4 s and 7 s at the bottom right.
-    run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x1e1e2e:s=1280x720:r=30:d=12",
-                "-vf", "drawtext=text='%{eif\\:floor(t*5)\\:d}':x=1080:y=600:fontsize=24:fontcolor=white:"
-                       "enable='between(t,4,7)'",
+    # A static "editor" where characters are "typed" only between 4 s and 7 s at the bottom right
+    # (drawbox, so it also works on FFmpeg builds without drawtext).
+    typing = ",".join(f"drawbox=x={1080 + i * 16}:y=600:w=12:h=20:color=white:t=fill:"
+                      f"enable='between(t,{4 + 0.5 * i},7)'" for i in range(6))
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x1e1e2e:s=1280x720:r=30:d=12", "-vf", typing,
                 "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-an", "-y", str(screen)])
     p = Project.create(tmp_path / "p", width=1280, height=720)
     p.add_asset(screen, "screen")
