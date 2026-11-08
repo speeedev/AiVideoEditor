@@ -297,19 +297,20 @@ class EditAgent:
                     raise
                 continue
             self.usage.add(getattr(response, "usage", None))
-            content = [_block_to_dict(b) for b in response.content]
-            self.messages.append({"role": "assistant", "content": content})
-            self.save_conversation()
             stop_reason = response.stop_reason or "end_turn"
             self._log({"event": "response", "stop_reason": stop_reason,
                        "usage": getattr(response, "usage", None)})
-
             if stop_reason == "refusal":
+                # A declined turn may be cut off mid-output: discard it (never added to the
+                # history) and never run its tool calls.
                 details = getattr(response, "stop_details", None)
                 final_text = "The model declined this request" + (
                     f": {getattr(details, 'explanation', '')}" if details else ".")
                 finished = True
                 break
+            content = [_block_to_dict(b) for b in response.content]
+            self.messages.append({"role": "assistant", "content": content})
+            self.save_conversation()
             if stop_reason == "pause_turn":
                 continue
 

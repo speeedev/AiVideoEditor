@@ -140,6 +140,9 @@ def test_refusal_and_max_tokens(session):
     res = agent.run("x", new_conversation=True)
     assert res.stop_reason == "refusal"
     assert session.timeline.duration == before  # truncated tool call was not executed
+    # The refused turn is not part of the saved history.
+    saved = json.loads((session.project.root / "agent" / "conversation.json").read_text())
+    assert saved[-1]["role"] == "user" and saved[-1]["content"][0]["type"] == "tool_result"
 
 
 def test_failed_mutation_rolls_back(session):
