@@ -131,11 +131,11 @@ class App:
             }
 
     # -- actions ----------------------------------------------------------------
-    def add_asset(self, path: str, role: str) -> dict:
+    def add_asset(self, path: str, role: str, audio_stream: int = 0) -> dict:
         if self.job:
             raise Busy(f"'{self.job}' is still running")
         with self.lock:
-            a = self.project.add_asset(path, role)
+            a = self.project.add_asset(path, role, audio_stream=int(audio_stream or 0))
         self.bus.publish({"type": "state"})
         return {"id": a.id}
 
@@ -438,7 +438,8 @@ def make_handler(app: App):
                     return self._upload(qs)
                 body = self._body()
                 if path == "/api/assets":
-                    return self._json(app.add_asset(body["path"], body.get("role", "other")))
+                    return self._json(app.add_asset(body["path"], body.get("role", "other"),
+                                                    body.get("audio_stream", 0)))
                 m = re.fullmatch(r"/api/assets/([^/]+)", path)
                 if m:
                     aid = unquote(m.group(1))

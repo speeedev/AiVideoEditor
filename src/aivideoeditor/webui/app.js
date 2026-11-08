@@ -524,7 +524,7 @@ function wire() {
   $("btnAddPath").onclick = guard(async () => {
     const p = $("pathInput").value.trim();
     if (!p) return;
-    await api("/api/assets", { path: p, role: guessRole(p) });
+    await api("/api/assets", { path: p, role: guessRole(p), audio_stream: +$("audioStream").value || 0 });
     $("pathInput").value = "";
   });
 
