@@ -152,3 +152,43 @@ def load_transcript(path: str | Path) -> Transcript:
         if body:
             segments.append(Segment(_parse_ts(a), _parse_ts(b.split()[0] if b.split() else b), body))
     return Transcript(language=None, segments=segments)
+
+
+# Phrases Whisper is known to invent on silence or music (from subtitle-laden training data).
+HALLUCINATIONS = (
+    "altyazı m.k", "altyazı m. k", "izlediğiniz için teşekkür", "abone olmayı unutmayın",
+    "beğenmeyi unutmayın", "bir sonraki videoda görüşmek üzere", "altyazılar",
+    "thanks for watching", "thank you for watching", "subtitles by", "please subscribe",
+    "amara.org", "transcribed by",
+)
+
+
+def clean_transcript(tr: Transcript, silences: list[tuple[float, float]] | None = None, *,
+                     min_prob: float = 0.35) -> tuple[Transcript, int]:
+    """Drop likely hallucinated text. Returns (clean transcript, number of removed words).
+
+    A segment is removed when it matches a known hallucination phrase, or when
+    all its words fall inside detected silence; single words inside long
+    silences with low confidence are removed too.
+    """
+    def in_silence(t: float, min_len: float) -> bool:
+        return any(a <= t <= b and b - a >= min_len for a, b in silences or [])
+
+    removed = 0
+    out = Transcript(language=tr.language)
+    for seg in tr.segments:
+        text = seg.text.lower().strip()
+        words = seg.words
+        if any(h in text for h in HALLUCINATIONS):
+            removed += max(1, len(words))
+            continue
+        if silences and words and all(in_silence((w.start + w.end) / 2, 0.6) for w in words):
+            removed += len(words)
+            continue
+        kept = [w for w in words if not (silences and w.prob < min_prob and in_silence((w.start + w.end) / 2, 1.0))]
+        removed += len(words) - len(kept)
+        if words and not kept:
+            continue
+        text_out = " ".join(w.text for w in kept) if len(kept) != len(words) else seg.text
+        out.segments.append(Segment(seg.start, seg.end, text_out, kept))
+    return out, removed

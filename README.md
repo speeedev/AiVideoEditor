@@ -48,7 +48,9 @@ export ANTHROPIC_API_KEY=sk-ant-...
 - FFmpeg kurulumu: macOS'ta `brew install ffmpeg`, Windows'ta `winget install ffmpeg`, Ubuntu'da
   `sudo apt install ffmpeg`.
 - `[transcribe]` ekstrası faster-whisper'ı kurar. İlk kullanımda Whisper modeli internetten indirilir.
-  NVIDIA GPU varsa transkripsiyon çok daha hızlıdır.
+  NVIDIA GPU varsa transkripsiyon çok daha hızlıdır. Türkçe için `--model medium` ya da `large-v3`
+  belirgin şekilde daha isabetlidir (`small` hızlı ama daha çok hata yapar). Whisper'ın sessiz yerlerde
+  uydurduğu "Altyazı M.K." gibi ifadeler otomatik olarak temizlenir.
 
 ## Hızlı deneme (sentetik demo)
 

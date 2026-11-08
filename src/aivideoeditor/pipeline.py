@@ -7,7 +7,7 @@ from collections.abc import Callable
 from .analysis.audio import decode_audio
 from .analysis.speech import analyze_speech
 from .analysis.sync import SYNC_SR, find_offset_arrays
-from .analysis.transcribe import transcribe
+from .analysis.transcribe import clean_transcript, transcribe
 from .analysis.visual import analyze_visual
 from .media.proxy import ensure_proxy
 from .project import Project, SyncInfo
@@ -48,8 +48,12 @@ def analyze_asset(
             if done - last[0] >= 30 or (total and done >= total - 1):
                 last[0] = done
                 log(f"[{asset_id}] transcribed {done:.0f}/{total:.0f}s")
-        project.save_transcript(asset_id, transcribe(audio, model=whisper_model, language=language,
-                                                     progress=progress))
+        raw = transcribe(audio, model=whisper_model, language=language, progress=progress)
+        speech = project.speech(asset_id)
+        clean, dropped = clean_transcript(raw, speech.silences if speech else None)
+        if dropped:
+            log(f"[{asset_id}] removed {dropped} likely hallucinated word(s) from the transcript")
+        project.save_transcript(asset_id, clean)
 
 
 def analyze_project(project: Project, *, do_transcribe: bool = True, whisper_model: str = "small",

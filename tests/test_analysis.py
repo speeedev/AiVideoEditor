@@ -73,3 +73,16 @@ def test_load_srt(tmp_path):
     words = list(tr.words())
     assert words[0].text == "Merhaba" and words[0].start == 1.0
     assert Transcript.from_dict(tr.to_dict()).segments[1].start == 3.0
+
+
+def test_clean_transcript_drops_hallucinations():
+    from aivideoeditor.analysis.transcribe import Segment, Word, clean_transcript
+    tr = Transcript("tr", [
+        Segment(0.5, 2.0, "Merhaba arkadaşlar", [Word(0.5, 1.0, "Merhaba", 0.9), Word(1.1, 2.0, "arkadaşlar", 0.9)]),
+        Segment(3.0, 6.0, "Altyazı M.K.", [Word(3.0, 6.0, "Altyazı", 0.4)]),
+        Segment(10.0, 11.0, "evet", [Word(10.2, 10.6, "evet", 0.2)]),          # inside a long silence
+        Segment(12.0, 13.0, "tamam", [Word(12.1, 12.5, "tamam", 0.9)]),
+    ])
+    clean, removed = clean_transcript(tr, [(2.2, 2.6), (8.0, 11.8)])
+    assert [s.text for s in clean.segments] == ["Merhaba arkadaşlar", "tamam"]
+    assert removed == 2
